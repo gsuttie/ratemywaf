@@ -58,6 +58,9 @@ public sealed class AppGatewayInfo
     public bool? WafLogsEnabled { get; set; }
     public List<string> LogDestinations { get; set; } = new();
 
+    /// <summary>ARM IDs of the Log Analytics workspaces that receive this resource's WAF firewall log.</summary>
+    public List<string> LogWorkspaceIds { get; set; } = new();
+
     /// <summary>Synthetic ID used for the legacy inline configuration when it is rated as a policy.</summary>
     public string LegacyPolicyId => Id + "/webApplicationFirewallConfiguration";
 }
@@ -85,6 +88,9 @@ public sealed class FrontDoorInfo
 
     public bool? WafLogsEnabled { get; set; }
     public List<string> LogDestinations { get; set; } = new();
+
+    /// <summary>ARM IDs of the Log Analytics workspaces that receive this resource's WAF firewall log.</summary>
+    public List<string> LogWorkspaceIds { get; set; } = new();
 }
 
 public enum WafPolicyKind { FrontDoor, ApplicationGateway, Cdn }

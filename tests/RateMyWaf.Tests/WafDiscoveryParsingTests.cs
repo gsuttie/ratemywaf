@@ -295,10 +295,12 @@ public class WafDiscoveryParsingTests
             J("""{ "name": "all", "properties": { "logs": [ { "categoryGroup": "allLogs", "enabled": true } ], "eventHubName": "hub1" } }"""),
         };
 
-        var (enabled, destinations) = WafDiscoveryService.ParseDiagnosticSettings(settings);
+        var (enabled, destinations, workspaceIds) = WafDiscoveryService.ParseDiagnosticSettings(settings);
 
         Assert.True(enabled);
         Assert.Equal(["Log Analytics: law-b", "Storage: stlogs", "Event Hub: hub1"], destinations);
+        // Only the workspace that actually receives the firewall log is offered for querying.
+        Assert.Equal(["/subscriptions/s/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law-b"], workspaceIds);
     }
 
     [Fact]
@@ -308,9 +310,10 @@ public class WafDiscoveryParsingTests
         {
             J("""{ "properties": { "logs": [ { "category": "FrontDoorWebApplicationFirewallLog", "enabled": false } ], "workspaceId": "/w/law" } }"""),
         };
-        var (enabled, destinations) = WafDiscoveryService.ParseDiagnosticSettings(settings);
+        var (enabled, destinations, workspaceIds) = WafDiscoveryService.ParseDiagnosticSettings(settings);
         Assert.False(enabled);
         Assert.Empty(destinations);
+        Assert.Empty(workspaceIds);
     }
 
     [Fact]

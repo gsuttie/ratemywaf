@@ -121,6 +121,12 @@ await shot('agw-grades');
 
 await page.getByRole('link', { name: /Analyse logs/ }).first().click();
 await page.waitForURL(/app-gateway\/logs/);
+// For the prod gateway, the workspace named in its diagnostic settings (another subscription) is pre-selected.
+await page.locator('select').first().selectOption({ label: 'agw-contoso-prod (WAF_v2)' });
+await page.locator('optgroup[label="Receives this WAF\'s firewall log"] option').first().waitFor({ state: 'attached', timeout: 10000 });
+const selectedWs = await page.locator('select').nth(1).inputValue();
+if (!selectedWs.endsWith('/law-contoso-security')) throw new Error('expected law-contoso-security preselected, got ' + selectedWs);
+console.log('  workspace preselected from diagnostic settings');
 await page.getByRole('button', { name: /Analyse logs/ }).click();
 await page.locator('article.activity').first().waitFor({ timeout: 15000 });
 await page.locator('article.activity button.btn').first().click();

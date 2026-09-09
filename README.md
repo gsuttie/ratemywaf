@@ -59,7 +59,11 @@ Everything is read-only, through Azure Resource Graph and ARM `GET` calls:
 - WAF policies: state, mode, managed rule sets and overrides, exclusions, custom rules, associations
 - The latest available managed rule set versions per product
 - Diagnostic settings (which WAF log categories are enabled and where they go)
-- For the Logs step: a resource-scoped Log Analytics query over `AzureDiagnostics` / `FrontDoorWebApplicationFirewallLog` / `AGWFirewallLogs`
+- For the Logs step: a Log Analytics query over `AzureDiagnostics` / `FrontDoorWebApplicationFirewallLog` / `AGWFirewallLogs`
+
+### Where the logs are queried from
+
+Resources often have several diagnostic settings (for example security logs to one workspace, everything else to another, sometimes in a different subscription). The Logs step therefore lists every Log Analytics workspace the credential can see across all subscriptions in the tenant and pre-selects the one the resource's diagnostic settings send the **firewall log** to. The query then runs against that workspace, filtered to the resource. "Auto-detect" falls back to the resource-centric query, which lets Azure locate the workspace.
 
 RateMyWAF never modifies a resource. The fix scripts it generates are PowerShell you review and run yourself.
 

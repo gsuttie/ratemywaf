@@ -145,6 +145,13 @@ public class WafLogAnalysisServiceTests
         Assert.Contains("ApplicationGatewayFirewallLog", gwEvidence);
         Assert.Contains("ago(7d)", gwEvidence);
 
+        // A workspace-wide query is pinned to the resource in every branch of the union.
+        const string gwId = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/agw";
+        var (scoped, scopedChanges) = WafLogAnalysisService.BuildQueries(WafFlowKind.ApplicationGateway, policies, "24h", gwId);
+        Assert.Equal(2, scoped.Split($"| where _ResourceId =~ '{gwId}'").Length - 1);
+        Assert.Contains($"_ResourceId =~ '{gwId}'", scopedChanges);
+        Assert.DoesNotContain("_ResourceId", gwEvidence);
+
         // A legacy inline config has no policy name in the logs: no filter.
         var (legacyEvidence, _) = WafLogAnalysisService.BuildQueries(WafFlowKind.ApplicationGateway, [new WafPolicyInfo { Name = "x", IsLegacyInline = true }], "1h");
         Assert.DoesNotContain("PolicyOut in~", legacyEvidence);

@@ -1,11 +1,28 @@
 namespace RateMyWaf.Models;
 
+/// <summary>A Log Analytics workspace the signed-in identity can see, from any subscription.</summary>
+public sealed class LogWorkspaceInfo
+{
+    /// <summary>ARM resource ID (what diagnostic settings reference).</summary>
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string ResourceGroup { get; set; } = string.Empty;
+    public string SubscriptionId { get; set; } = string.Empty;
+    public string Location { get; set; } = string.Empty;
+
+    /// <summary>Workspace GUID used by the Log Analytics query API.</summary>
+    public string CustomerId { get; set; } = string.Empty;
+}
+
 /// <summary>Result of analysing WAF logs for one edge resource over a time window.</summary>
 public sealed class WafLogAnalysis
 {
     public WafFlowKind Flow { get; set; }
     public string TargetId { get; set; } = string.Empty;
     public string TargetName { get; set; } = string.Empty;
+
+    /// <summary>Workspace the query ran against; empty when the resource-centric (auto-detect) query was used.</summary>
+    public string WorkspaceName { get; set; } = string.Empty;
     public List<string> PolicyNames { get; set; } = new();
     public string TimeRangeKey { get; set; } = string.Empty;
     public string TimeRangeLabel { get; set; } = string.Empty;

@@ -19,6 +19,7 @@ public class ComponentTests : BunitContext
         public Task<List<JsonElement>> QueryResourceGraphAsync(string query, IReadOnlyCollection<string> subscriptionIds, string? tenantId, CancellationToken ct = default) => throw new InvalidOperationException("Azure must not be called in demo mode");
         public Task<List<JsonElement>> GetArmListAsync(string url, string? tenantId, CancellationToken ct = default) => throw new InvalidOperationException("Azure must not be called in demo mode");
         public Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsAsync(string resourceId, string query, string? tenantId, CancellationToken ct = default) => throw new InvalidOperationException("Azure must not be called in demo mode");
+        public Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsWorkspaceAsync(string workspaceCustomerId, string query, string? tenantId, CancellationToken ct = default) => throw new InvalidOperationException("Azure must not be called in demo mode");
     }
 
     private WafFlowService Flows { get; }
@@ -124,6 +125,15 @@ public class ComponentTests : BunitContext
         Assert.NotEmpty(cut.FindAll("select option"));
         Assert.Empty(cut.FindAll("article.activity"));
 
+        // Pick the Front Door whose diagnostic settings name a workspace: it is pre-selected,
+        // and other workspaces (from any subscription) are offered too.
+        var prodId = Flows.State.For(WafFlowKind.FrontDoor).Scan!.FrontDoors.Single(f => f.Name == "afd-contoso-prod").Id;
+        cut.FindAll("select")[0].Change(prodId);
+        cut.WaitForAssertion(() => Assert.Contains("Receives this WAF", cut.Markup), TimeSpan.FromSeconds(5));
+        Assert.Contains("law-contoso-prod", cut.Markup);
+        Assert.Contains("law-contoso-security", cut.Markup);
+        Assert.Contains("Auto-detect", cut.Markup);
+
         await cut.Find("button.btn-primary").ClickAsync(new());
         cut.WaitForState(() => cut.FindAll("article.activity").Count > 0, TimeSpan.FromSeconds(5));
 
@@ -131,6 +141,8 @@ public class ComponentTests : BunitContext
         Assert.Contains("Likely real attack", cut.Markup);
         Assert.Contains("Possible false positive", cut.Markup);
         Assert.NotNull(Flows.State.For(WafFlowKind.FrontDoor).LogAnalysis);
+        Assert.Equal("law-contoso-prod", Flows.State.For(WafFlowKind.FrontDoor).LogAnalysis!.WorkspaceName);
+        Assert.Contains("workspace law-contoso-prod", cut.Markup);
 
         // Fix script modal opens with a generated script.
         cut.FindAll("article.activity button.btn")[0].Click();

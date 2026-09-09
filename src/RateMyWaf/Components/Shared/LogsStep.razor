@@ -27,6 +27,30 @@
                 }
             </select>
         </label>
+        <label class="field grow">
+            <span class="field-label">Log Analytics workspace</span>
+            <select class="select" value="@_workspaceId" @onchange="e => _workspaceId = e.Value?.ToString() ?? string.Empty" disabled="@(_running || _workspacesLoading)">
+                <option value="">@(_workspacesLoading ? "Loading workspaces…" : "Auto-detect (resource-centric query)")</option>
+                @if (DiagnosticWorkspaces.Count > 0)
+                {
+                    <optgroup label="Receives this WAF's firewall log">
+                        @foreach (var w in DiagnosticWorkspaces)
+                        {
+                            <option value="@w.Id">@w.Name (@Flows.SubscriptionName(w.SubscriptionId))</option>
+                        }
+                    </optgroup>
+                }
+                @foreach (var group in OtherWorkspaces.GroupBy(w => w.SubscriptionId).OrderBy(g => Flows.SubscriptionName(g.Key), StringComparer.OrdinalIgnoreCase))
+                {
+                    <optgroup label="@Flows.SubscriptionName(group.Key)">
+                        @foreach (var w in group.OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <option value="@w.Id">@w.Name</option>
+                        }
+                    </optgroup>
+                }
+            </select>
+        </label>
         <label class="field">
             <span class="field-label">Time range</span>
             <select class="select" @bind="_timeRange" disabled="@_running">
@@ -36,7 +60,7 @@
                 }
             </select>
         </label>
-        <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_running || _selectedPolicies.Count == 0)">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_running">
             @if (_running) { <span class="spinner sm light"></span> <span>Analysing…</span> }
             else { <Icon Name="logs" Size="16" /> <span>Analyse logs</span> }
         </button>
@@ -54,10 +78,26 @@
             {
                 <label class="check"><input type="checkbox" checked="@_selectedPolicies.Contains(p.Id)" @onchange="() => TogglePolicy(p.Id)" disabled="@_running" /> @p.Name <span class="muted small">· @(p.IsEnabled ? p.Mode : "Disabled")</span></label>
             }
+            @if (_selectedPolicies.Count == 0)
+            {
+                <span class="muted small">none ticked: every firewall event for this @Flow.Label() is analysed</span>
+            }
         </div>
     }
 
+    @if (_workspacesError is not null)
+    {
+        <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">Workspaces could not be listed (@_workspacesError). Auto-detect still works if the credential can read the workspace.</span></div>
+    }
     @{ var (logsOn, dests) = Logging(_targetId); }
+    @if (logsOn == true && TargetWorkspaceIds.Count > 1)
+    {
+        <div class="notice notice-info"><Icon Name="info" Size="16" /><span class="small">This @Flow.Label() sends its firewall log to <b>@TargetWorkspaceIds.Count workspaces</b>; the first one is selected. Pick another to compare.</span></div>
+    }
+    else if (logsOn == true && TargetWorkspaceIds.Count > 0 && DiagnosticWorkspaces.Count == 0 && !_workspacesLoading)
+    {
+        <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">The firewall log goes to <b>@string.Join(", ", TargetWorkspaceIds.Select(Services.Azure.Json.LastSegment))</b>, which the current credential cannot see. Auto-detect will be used.</span></div>
+    }
     @if (logsOn == false)
     {
         <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">WAF logging is <b>disabled</b> for this @Flow.Label() — there are no logs to analyse.</span></div>
@@ -75,7 +115,7 @@
 else if (Result is not null)
 {
     <div class="results-bar">
-        <span class="muted small"><b>@Result.TargetName</b> · @string.Join(", ", Result.PolicyNames) · @Result.TimeRangeLabel @if (Flows.State.DemoMode) { <span class="pill pill-demo sm">sample</span> }</span>
+        <span class="muted small"><b>@Result.TargetName</b> · @(Result.PolicyNames.Count == 0 ? "all policies" : string.Join(", ", Result.PolicyNames)) · @Result.TimeRangeLabel · @(string.IsNullOrEmpty(Result.WorkspaceName) ? "auto-detected workspace" : $"workspace {Result.WorkspaceName}") @if (Flows.State.DemoMode) { <span class="pill pill-demo sm">sample</span> }</span>
         <span class="results-actions">
             <button class="btn btn-ghost btn-sm" @onclick="() => _changesOpen = true"><Icon Name="refresh" Size="14" /> Changes vs previous period <span class="count">@Result.Changes.Count</span></button>
             <button class="btn btn-ghost btn-sm" @onclick="() => _report.Open(false)"><Icon Name="doc" Size="14" /> Summary report</button>
@@ -99,7 +139,10 @@ else if (Result is not null)
 
     @if (Result.TotalEvents == 0)
     {
-        <div class="card empty"><p class="ok"><Icon Name="check" Size="16" /> No WAF events for the selected polic@(Result.PolicyNames.Count == 1 ? "y" : "ies") in the @Result.TimeRangeLabel.</p></div>
+        <div class="card empty">
+            <p class="ok"><Icon Name="check" Size="16" /> No WAF events @(Result.PolicyNames.Count == 0 ? "for this " + Flow.Label() : "for the selected polic" + (Result.PolicyNames.Count == 1 ? "y" : "ies")) in the @Result.TimeRangeLabel.</p>
+            <p class="muted small">If you expected activity, widen the time range or try another workspace. Untick every policy to analyse all firewall events for this @Flow.Label().</p>
+        </div>
     }
     else
     {
@@ -173,9 +216,29 @@ else if (Result is not null)
     private FixScriptModal _fix = default!;
     private string _targetId = "";
     private string _timeRange = "24h";
+    private string _workspaceId = "";
     private readonly HashSet<string> _selectedPolicies = new(StringComparer.OrdinalIgnoreCase);
     private bool _running;
     private bool _changesOpen;
+    private bool _workspacesLoading;
+    private string? _workspacesError;
+    private List<LogWorkspaceInfo> _workspaces = [];
+
+    /// <summary>ARM IDs of the workspaces the selected resource's diagnostic settings send the firewall log to.</summary>
+    private List<string> TargetWorkspaceIds =>
+        Scan?.FrontDoors.FirstOrDefault(f => f.Id.Equals(_targetId, StringComparison.OrdinalIgnoreCase))?.LogWorkspaceIds
+        ?? Scan?.AppGateways.FirstOrDefault(g => g.Id.Equals(_targetId, StringComparison.OrdinalIgnoreCase))?.LogWorkspaceIds
+        ?? [];
+
+    private List<LogWorkspaceInfo> DiagnosticWorkspaces =>
+        TargetWorkspaceIds.Select(id => _workspaces.FirstOrDefault(w => w.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
+            .Where(w => w is not null).Select(w => w!).ToList();
+
+    private IEnumerable<LogWorkspaceInfo> OtherWorkspaces =>
+        _workspaces.Where(w => !TargetWorkspaceIds.Contains(w.Id, StringComparer.OrdinalIgnoreCase));
+
+    private LogWorkspaceInfo? SelectedWorkspace =>
+        _workspaces.FirstOrDefault(w => w.Id.Equals(_workspaceId, StringComparison.OrdinalIgnoreCase));
 
     private FlowState State => Flows.State.For(Flow);
     private WafScanResult? Scan => State.Scan;
@@ -188,12 +251,33 @@ else if (Result is not null)
 
     private List<WafPolicyInfo> Linked => Scan is null || string.IsNullOrEmpty(_targetId) ? [] : WafFlowService.LinkedPolicies(Scan, _targetId);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         var initial = Targets.FirstOrDefault(t => t.Id.Equals(Result?.TargetId, StringComparison.OrdinalIgnoreCase));
         if (initial.Id is null) initial = Targets.FirstOrDefault();
         if (initial.Id is not null) SelectTarget(initial.Id);
         if (Result is not null) _timeRange = Result.TimeRangeKey;
+        await LoadWorkspacesAsync();
+    }
+
+    private async Task LoadWorkspacesAsync()
+    {
+        _workspacesLoading = true;
+        _workspacesError = null;
+        try
+        {
+            _workspaces = await Flows.GetWorkspacesAsync(Flows.TenantOf(Flow, _targetId));
+        }
+        catch (Exception ex)
+        {
+            _workspaces = [];
+            _workspacesError = ex.Message;
+        }
+        finally
+        {
+            _workspacesLoading = false;
+        }
+        DefaultWorkspace();
     }
 
     private void OnTargetChanged(ChangeEventArgs e) => SelectTarget(e.Value?.ToString() ?? "");
@@ -203,7 +287,11 @@ else if (Result is not null)
         _targetId = id;
         _selectedPolicies.Clear();
         foreach (var p in Linked) _selectedPolicies.Add(p.Id);
+        DefaultWorkspace();
     }
+
+    /// <summary>Pre-select the workspace the diagnostic settings point at; fall back to auto-detect.</summary>
+    private void DefaultWorkspace() => _workspaceId = DiagnosticWorkspaces.FirstOrDefault()?.Id ?? "";
 
     private void TogglePolicy(string id) { if (!_selectedPolicies.Remove(id)) _selectedPolicies.Add(id); }
 
@@ -224,7 +312,7 @@ else if (Result is not null)
         try
         {
             var policies = Linked.Where(p => _selectedPolicies.Contains(p.Id)).ToList();
-            await Flows.AnalyzeLogsAsync(Flow, target.Id, target.Name, policies, _timeRange);
+            await Flows.AnalyzeLogsAsync(Flow, target.Id, target.Name, policies, _timeRange, SelectedWorkspace);
         }
         catch (Exception ex)
         {

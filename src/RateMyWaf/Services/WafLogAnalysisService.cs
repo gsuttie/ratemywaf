@@ -69,9 +69,15 @@ public sealed class WafLogAnalysisService
     public static string LabelFor(string timeRange) =>
         TimeRanges.FirstOrDefault(t => t.Key == timeRange).Label ?? timeRange;
 
+    /// <param name="workspace">
+    /// Workspace to query. When given, the query runs against that workspace filtered to the resource
+    /// (the reliable choice when a resource's logs are split across several workspaces); when null the
+    /// resource-centric query lets Azure find the workspace(s).
+    /// </param>
     public async Task<WafLogAnalysis> AnalyzeAsync(
         WafFlowKind flow, string targetId, string targetName,
-        IReadOnlyCollection<WafPolicyInfo> policies, string timeRange, string? tenantId, CancellationToken ct = default)
+        IReadOnlyCollection<WafPolicyInfo> policies, string timeRange, string? tenantId,
+        LogWorkspaceInfo? workspace = null, CancellationToken ct = default)
     {
         if (!DoubledTimeRanges.ContainsKey(timeRange))
             throw new ArgumentException($"Unsupported time range '{timeRange}'.");
@@ -81,18 +87,26 @@ public sealed class WafLogAnalysisService
             Flow = flow,
             TargetId = targetId,
             TargetName = targetName,
+            WorkspaceName = workspace?.Name ?? string.Empty,
             PolicyNames = policies.Select(p => p.Name).ToList(),
             TimeRangeKey = timeRange,
             TimeRangeLabel = LabelFor(timeRange).ToLowerInvariant()
         };
 
-        var (evidenceQuery, changesQuery) = BuildQueries(flow, policies, timeRange);
+        var (evidenceQuery, changesQuery) = BuildQueries(flow, policies, timeRange, workspace is null ? null : targetId);
 
         List<Dictionary<string, JsonElement>> evidenceRows, changeRows;
         try
         {
-            var evidenceTask = _azure.QueryLogAnalyticsAsync(targetId, evidenceQuery, tenantId, ct);
-            var changesTask = _azure.QueryLogAnalyticsAsync(targetId, changesQuery, tenantId, ct);
+            if (workspace is not null && string.IsNullOrEmpty(workspace.CustomerId))
+                throw new InvalidOperationException($"Workspace '{workspace.Name}' has no workspace ID (customerId) — it may not be readable with the current credential.");
+
+            var evidenceTask = workspace is null
+                ? _azure.QueryLogAnalyticsAsync(targetId, evidenceQuery, tenantId, ct)
+                : _azure.QueryLogAnalyticsWorkspaceAsync(workspace.CustomerId, evidenceQuery, tenantId, ct);
+            var changesTask = workspace is null
+                ? _azure.QueryLogAnalyticsAsync(targetId, changesQuery, tenantId, ct)
+                : _azure.QueryLogAnalyticsWorkspaceAsync(workspace.CustomerId, changesQuery, tenantId, ct);
             await Task.WhenAll(evidenceTask, changesTask);
             evidenceRows = evidenceTask.Result;
             changeRows = changesTask.Result;
@@ -106,11 +120,73 @@ public sealed class WafLogAnalysisService
         }
 
         Populate(analysis, policies, evidenceRows, changeRows);
+
+        // Nothing matched: check whether the workspace holds firewall events for this resource at all,
+        // so the user can tell "quiet WAF" from "wrong workspace / policy name".
+        if (analysis.TotalEvents == 0)
+            await AddEmptyResultDiagnosticAsync(analysis, flow, targetId, timeRange, tenantId, workspace, ct);
+
         return analysis;
     }
 
-    /// <summary>Builds the two KQL queries (aggregated evidence, and current-vs-previous period counts).</summary>
-    internal static (string Evidence, string Changes) BuildQueries(WafFlowKind flow, IReadOnlyCollection<WafPolicyInfo> policies, string timeRange)
+    private async Task AddEmptyResultDiagnosticAsync(WafLogAnalysis analysis, WafFlowKind flow, string targetId,
+        string timeRange, string? tenantId, LogWorkspaceInfo? workspace, CancellationToken ct)
+    {
+        try
+        {
+            var probe = BuildProbeQuery(flow, timeRange, workspace is null ? null : targetId);
+            var rows = workspace is null
+                ? await _azure.QueryLogAnalyticsAsync(targetId, probe, tenantId, ct)
+                : await _azure.QueryLogAnalyticsWorkspaceAsync(workspace.CustomerId, probe, tenantId, ct);
+
+            var seen = rows.Select(r => (Policy: Cell(r, "PolicyOut"), Count: CellInt(r, "Count"))).Where(r => r.Count > 0).ToList();
+            if (seen.Count == 0)
+            {
+                analysis.Warnings.Add(
+                    $"No firewall log rows exist for this resource in the {analysis.TimeRangeLabel}" +
+                    (workspace is null ? "" : $" in workspace '{workspace.Name}'") +
+                    ". Either the WAF saw nothing, or the logs land in a different workspace — widen the time range or pick another workspace.");
+            }
+            else
+            {
+                var summary = string.Join(", ", seen.Select(s => $"'{(string.IsNullOrEmpty(s.Policy) ? "(no policy name)" : s.Policy)}' ({s.Count})"));
+                analysis.Warnings.Add(
+                    $"The logs do contain {seen.Sum(s => s.Count)} firewall event(s) for this resource in the {analysis.TimeRangeLabel}, " +
+                    $"but under other policy name(s): {summary}. Tick the matching policy, or untick all to analyse everything.");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Empty-result probe failed for {Target}.", targetId);
+        }
+    }
+
+    /// <summary>Counts firewall events per policy name, without any policy filter.</summary>
+    internal static string BuildProbeQuery(WafFlowKind flow, string timeRange, string? resourceIdFilter)
+    {
+        var union = ScopedUnion(flow, resourceIdFilter);
+        return $"{union}\n| where TimeGenerated > ago({timeRange})\n| summarize Count=count() by PolicyOut";
+    }
+
+    private static string ScopedUnion(WafFlowKind flow, string? resourceIdFilter)
+    {
+        var union = flow == WafFlowKind.FrontDoor ? FrontDoorLogUnionQuery : AppGatewayLogUnionQuery;
+        if (string.IsNullOrEmpty(resourceIdFilter)) return union;
+
+        // _ResourceId is present on AzureDiagnostics and on the resource-specific tables alike.
+        var filter = $"| where _ResourceId =~ '{resourceIdFilter.Replace("'", "\\'")}'\n";
+        return union.Replace("(AzureDiagnostics\n", "(AzureDiagnostics\n" + filter)
+                    .Replace("(FrontDoorWebApplicationFirewallLog\n", "(FrontDoorWebApplicationFirewallLog\n" + filter)
+                    .Replace("(AGWFirewallLogs\n", "(AGWFirewallLogs\n" + filter);
+    }
+
+    /// <summary>
+    /// Builds the two KQL queries (aggregated evidence, and current-vs-previous period counts).
+    /// <paramref name="resourceIdFilter"/> restricts a workspace-wide query to one resource; the
+    /// resource-centric query needs no filter.
+    /// </summary>
+    internal static (string Evidence, string Changes) BuildQueries(
+        WafFlowKind flow, IReadOnlyCollection<WafPolicyInfo> policies, string timeRange, string? resourceIdFilter = null)
     {
         // Legacy inline configurations have no policy name in the logs, so do not filter on them.
         var namedPolicies = policies.Where(p => !p.IsLegacyInline).ToList();
@@ -118,7 +194,7 @@ public sealed class WafLogAnalysisService
             ? $"| where PolicyOut in~ ({string.Join(", ", namedPolicies.Select(p => $"'{p.Name.Replace("'", "\\'")}'"))})"
             : string.Empty;
 
-        var union = flow == WafFlowKind.FrontDoor ? FrontDoorLogUnionQuery : AppGatewayLogUnionQuery;
+        var union = ScopedUnion(flow, resourceIdFilter);
 
         var evidence =
             $"{union}\n{policyFilter}\n" +
@@ -231,7 +307,8 @@ public sealed class WafLogAnalysisService
         "(AzureDiagnostics\n" +
         "| where Category == 'ApplicationGatewayFirewallLog'\n" +
         "| project TimeGenerated,\n" +
-        "    PolicyOut = column_ifexists('policyScopeName_s',''),\n" +
+        // policyScopeName is the scope ('Global', a listener name...), not the policy: take the policy name from policyId.\n" +
+        "    PolicyOut = tostring(split(column_ifexists('policyId_s',''), '/')[-1]),\n" +
         "    RuleOut = column_ifexists('ruleId_s',''),\n" +
         "    ActionOut = column_ifexists('action_s',''),\n" +
         "    IpOut = column_ifexists('clientIp_s',''),\n" +
@@ -241,7 +318,7 @@ public sealed class WafLogAnalysisService
         "    MsgOut = column_ifexists('Message','')),\n" +
         "(AGWFirewallLogs\n" +
         "| project TimeGenerated,\n" +
-        "    PolicyOut = tostring(column_ifexists('PolicyScopeName','')),\n" +
+        "    PolicyOut = tostring(split(tostring(column_ifexists('PolicyId','')), '/')[-1]),\n" +
         "    RuleOut = tostring(column_ifexists('RuleId','')),\n" +
         "    ActionOut = tostring(column_ifexists('Action','')),\n" +
         "    IpOut = tostring(column_ifexists('ClientIp','')),\n" +

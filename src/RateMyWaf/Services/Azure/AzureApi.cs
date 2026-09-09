@@ -95,13 +95,21 @@ public sealed class AzureApi : IAzureApi
         return items;
     }
 
-    public async Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsAsync(
-        string resourceId, string query, string? tenantId, CancellationToken ct = default)
+    public Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsAsync(
+        string resourceId, string query, string? tenantId, CancellationToken ct = default) =>
+        QueryLogsAsync($"{LogAnalyticsBase}/v1{resourceId}/query", query, tenantId, ct);
+
+    public Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsWorkspaceAsync(
+        string workspaceCustomerId, string query, string? tenantId, CancellationToken ct = default) =>
+        QueryLogsAsync($"{LogAnalyticsBase}/v1/workspaces/{workspaceCustomerId}/query", query, tenantId, ct);
+
+    private async Task<List<Dictionary<string, JsonElement>>> QueryLogsAsync(
+        string url, string query, string? tenantId, CancellationToken ct)
     {
         var client = _httpClientFactory.CreateClient();
         var token = await GetTokenAsync(tenantId, LogAnalyticsScopes, ct);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{LogAnalyticsBase}/v1{resourceId}/query");
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(
             JsonSerializer.Serialize(new Dictionary<string, string> { ["query"] = query }),

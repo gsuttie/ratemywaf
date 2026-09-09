@@ -79,6 +79,31 @@ public sealed class WafDiscoveryService
         return result;
     }
 
+    private const string WorkspacesQuery =
+        "Resources | where type =~ 'microsoft.operationalinsights/workspaces' | project id, name, location, resourceGroup, subscriptionId, customerId = tostring(properties.customerId)";
+
+    /// <summary>Every Log Analytics workspace in the given subscriptions (used to pick where WAF logs are queried from).</summary>
+    public async Task<List<LogWorkspaceInfo>> GetWorkspacesAsync(
+        IReadOnlyCollection<string> subscriptionIds, string? tenantId, CancellationToken ct = default)
+    {
+        if (subscriptionIds.Count == 0) return [];
+        var rows = await _azure.QueryResourceGraphAsync(WorkspacesQuery, subscriptionIds, tenantId, ct);
+        return rows.Select(ParseWorkspace)
+            .Where(w => !string.IsNullOrEmpty(w.Id))
+            .OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    internal static LogWorkspaceInfo ParseWorkspace(JsonElement row) => new()
+    {
+        Id = Str(row, "id"),
+        Name = Str(row, "name"),
+        Location = Str(row, "location"),
+        ResourceGroup = Str(row, "resourceGroup"),
+        SubscriptionId = Str(row, "subscriptionId"),
+        CustomerId = Str(row, "customerId")
+    };
+
     /// <summary>Full read-only scan of one flow across the supplied subscriptions (which must share a tenant).</summary>
     public async Task<WafScanResult> ScanAsync(
         WafFlowKind flow, IReadOnlyCollection<string> subscriptionIds, string? tenantId,
@@ -737,9 +762,13 @@ public sealed class WafDiscoveryService
     {
         var tasks = new List<Task<bool>>();
         foreach (var gw in result.AppGateways)
-            tasks.Add(ReadDiagnosticsAsync(gw.Id, tenantId, on => gw.WafLogsEnabled = on, d => gw.LogDestinations = d, ct));
+            tasks.Add(ReadDiagnosticsAsync(gw.Id, tenantId,
+                d => { gw.WafLogsEnabled = d.Enabled; gw.LogDestinations = d.Destinations; gw.LogWorkspaceIds = d.WorkspaceIds; },
+                () => gw.WafLogsEnabled = null, ct));
         foreach (var fd in result.FrontDoors)
-            tasks.Add(ReadDiagnosticsAsync(fd.Id, tenantId, on => fd.WafLogsEnabled = on, d => fd.LogDestinations = d, ct));
+            tasks.Add(ReadDiagnosticsAsync(fd.Id, tenantId,
+                d => { fd.WafLogsEnabled = d.Enabled; fd.LogDestinations = d.Destinations; fd.LogWorkspaceIds = d.WorkspaceIds; },
+                () => fd.WafLogsEnabled = null, ct));
         if (tasks.Count == 0) return;
 
         var outcomes = await Task.WhenAll(tasks);
@@ -749,29 +778,31 @@ public sealed class WafDiscoveryService
     }
 
     private async Task<bool> ReadDiagnosticsAsync(
-        string resourceId, string? tenantId, Action<bool?> setEnabled, Action<List<string>> setDestinations, CancellationToken ct)
+        string resourceId, string? tenantId, Action<DiagnosticsInfo> apply, Action unknown, CancellationToken ct)
     {
         try
         {
             var settings = await _azure.GetArmListAsync(
                 $"{AzureApi.ArmBase}{resourceId}/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview", tenantId, ct);
-            var (enabled, destinations) = ParseDiagnosticSettings(settings);
-            setEnabled(enabled);
-            setDestinations(destinations);
+            apply(ParseDiagnosticSettings(settings));
             return true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read diagnostic settings for {ResourceId}.", resourceId);
-            setEnabled(null);
+            unknown();
             return false;
         }
     }
 
-    internal static (bool Enabled, List<string> Destinations) ParseDiagnosticSettings(IEnumerable<JsonElement> settings)
+    /// <summary>What the diagnostic settings say about a resource's WAF firewall log.</summary>
+    internal sealed record DiagnosticsInfo(bool Enabled, List<string> Destinations, List<string> WorkspaceIds);
+
+    internal static DiagnosticsInfo ParseDiagnosticSettings(IEnumerable<JsonElement> settings)
     {
         var enabled = false;
         var destinations = new List<string>();
+        var workspaceIds = new List<string>();
 
         foreach (var setting in settings)
         {
@@ -796,12 +827,15 @@ public sealed class WafDiscoveryService
             if (!wafLogOn) continue;
 
             enabled = true;
-            AddDestination(destinations, "Log Analytics", Str(props, "workspaceId"));
+            var workspaceId = Str(props, "workspaceId");
+            if (!string.IsNullOrEmpty(workspaceId) && !workspaceIds.Contains(workspaceId, StringComparer.OrdinalIgnoreCase))
+                workspaceIds.Add(workspaceId);
+            AddDestination(destinations, "Log Analytics", workspaceId);
             AddDestination(destinations, "Storage", Str(props, "storageAccountId"));
             AddDestination(destinations, "Event Hub", FirstNonEmpty(Str(props, "eventHubName"), Str(props, "eventHubAuthorizationRuleId")));
             AddDestination(destinations, "Partner solution", Str(props, "marketplacePartnerId"));
         }
-        return (enabled, destinations.Distinct().ToList());
+        return new DiagnosticsInfo(enabled, destinations.Distinct().ToList(), workspaceIds);
 
         static void AddDestination(List<string> list, string label, string idOrName)
         {

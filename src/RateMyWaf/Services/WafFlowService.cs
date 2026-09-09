@@ -96,8 +96,47 @@ public sealed class WafFlowService
         return result;
     }
 
+    private List<LogWorkspaceInfo>? _workspaces;
+    private string? _workspacesTenant;
+
+    /// <summary>
+    /// Every Log Analytics workspace the credential can see in the tenant, across all its subscriptions
+    /// (not only the scanned ones), since WAF logs are often centralised elsewhere. Cached per session.
+    /// </summary>
+    public async Task<List<LogWorkspaceInfo>> GetWorkspacesAsync(string? tenantId, CancellationToken ct = default)
+    {
+        if (_workspaces is not null && string.Equals(_workspacesTenant, tenantId, StringComparison.OrdinalIgnoreCase))
+            return _workspaces;
+
+        List<LogWorkspaceInfo> workspaces;
+        if (_state.DemoMode)
+        {
+            workspaces = DemoDataService.Workspaces();
+        }
+        else
+        {
+            var subIds = Subscriptions
+                .Where(s => string.IsNullOrEmpty(tenantId) || s.TenantId.Equals(tenantId, StringComparison.OrdinalIgnoreCase))
+                .Select(s => s.SubscriptionId)
+                .ToList();
+            workspaces = await _discovery.GetWorkspacesAsync(subIds, tenantId, ct);
+        }
+        _workspaces = workspaces;
+        _workspacesTenant = tenantId;
+        return workspaces;
+    }
+
+    public string? TenantOf(WafFlowKind flow, string targetId)
+    {
+        var fs = _state.For(flow);
+        var subId = fs.Scan?.FrontDoors.FirstOrDefault(f => f.Id.Equals(targetId, StringComparison.OrdinalIgnoreCase))?.SubscriptionId
+                    ?? fs.Scan?.AppGateways.FirstOrDefault(g => g.Id.Equals(targetId, StringComparison.OrdinalIgnoreCase))?.SubscriptionId;
+        return Subscriptions.FirstOrDefault(s => s.SubscriptionId.Equals(subId, StringComparison.OrdinalIgnoreCase))?.TenantId
+               ?? fs.SelectedTenantId;
+    }
+
     public async Task<WafLogAnalysis> AnalyzeLogsAsync(WafFlowKind flow, string targetId, string targetName,
-        IReadOnlyCollection<WafPolicyInfo> policies, string timeRange, CancellationToken ct = default)
+        IReadOnlyCollection<WafPolicyInfo> policies, string timeRange, LogWorkspaceInfo? workspace = null, CancellationToken ct = default)
     {
         var fs = _state.For(flow);
         WafLogAnalysis analysis;
@@ -105,13 +144,11 @@ public sealed class WafFlowService
         {
             await Task.Delay(700, ct);
             analysis = DemoDataService.LogAnalysis(flow, targetId, targetName, policies, timeRange);
+            analysis.WorkspaceName = workspace?.Name ?? string.Empty;
         }
         else
         {
-            var subId = fs.Scan?.FrontDoors.FirstOrDefault(f => f.Id == targetId)?.SubscriptionId
-                        ?? fs.Scan?.AppGateways.FirstOrDefault(g => g.Id == targetId)?.SubscriptionId;
-            var tenantId = Subscriptions.FirstOrDefault(s => s.SubscriptionId.Equals(subId, StringComparison.OrdinalIgnoreCase))?.TenantId;
-            analysis = await _logs.AnalyzeAsync(flow, targetId, targetName, policies, timeRange, tenantId, ct);
+            analysis = await _logs.AnalyzeAsync(flow, targetId, targetName, policies, timeRange, TenantOf(flow, targetId), workspace, ct);
         }
         fs.LogAnalysis = analysis;
         return analysis;

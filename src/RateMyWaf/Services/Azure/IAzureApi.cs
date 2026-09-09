@@ -16,4 +16,7 @@ public interface IAzureApi
 
     /// <summary>Runs a KQL query scoped to a resource (Log Analytics resource-centric query) and returns the first table's rows.</summary>
     Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsAsync(string resourceId, string query, string? tenantId, CancellationToken ct = default);
+
+    /// <summary>Runs a KQL query against one workspace (by workspace GUID) and returns the first table's rows.</summary>
+    Task<List<Dictionary<string, JsonElement>>> QueryLogAnalyticsWorkspaceAsync(string workspaceCustomerId, string query, string? tenantId, CancellationToken ct = default);
 }

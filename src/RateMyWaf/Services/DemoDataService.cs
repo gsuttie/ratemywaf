@@ -31,6 +31,17 @@ public static class DemoDataService
 
     private static string Rg(string sub, string rg) => $"/subscriptions/{sub}/resourceGroups/{rg}/providers";
 
+    public static readonly string LawProdId = $"{Rg(SubProd, "rg-monitoring")}/Microsoft.OperationalInsights/workspaces/law-contoso-prod";
+    public static readonly string LawSecurityId = $"{Rg(SubShared, "rg-security")}/Microsoft.OperationalInsights/workspaces/law-contoso-security";
+
+    /// <summary>Workspaces across both sample subscriptions; the security one lives in a different subscription from the gateways.</summary>
+    public static List<LogWorkspaceInfo> Workspaces() =>
+    [
+        new() { Id = LawProdId, Name = "law-contoso-prod", ResourceGroup = "rg-monitoring", SubscriptionId = SubProd, Location = "westeurope", CustomerId = "aaaaaaaa-0000-0000-0000-000000000001" },
+        new() { Id = LawSecurityId, Name = "law-contoso-security", ResourceGroup = "rg-security", SubscriptionId = SubShared, Location = "westeurope", CustomerId = "aaaaaaaa-0000-0000-0000-000000000002" },
+        new() { Id = $"{Rg(SubShared, "rg-platform")}/Microsoft.OperationalInsights/workspaces/law-contoso-platform", Name = "law-contoso-platform", ResourceGroup = "rg-platform", SubscriptionId = SubShared, Location = "northeurope", CustomerId = "aaaaaaaa-0000-0000-0000-000000000003" },
+    ];
+
     public static WafScanResult Scan(WafFlowKind flow, IReadOnlyCollection<string> subscriptionIds)
     {
         var result = flow == WafFlowKind.FrontDoor ? FrontDoorEstate() : AppGatewayEstate();
@@ -63,7 +74,7 @@ public static class DemoDataService
                 new() { Id = prodId + "/customdomains/www-contoso-com", Name = "www-contoso-com", HostName = "www.contoso.com", IsCustomDomain = true, WafPolicyId = prodPolicyId },
                 new() { Id = prodId + "/customdomains/shop-contoso-com", Name = "shop-contoso-com", HostName = "shop.contoso.com", IsCustomDomain = true, WafPolicyId = prodPolicyId },
             ],
-            WafLogsEnabled = true, LogDestinations = ["Log Analytics: law-contoso-prod"]
+            WafLogsEnabled = true, LogDestinations = ["Log Analytics: law-contoso-prod"], LogWorkspaceIds = [LawProdId]
         };
         result.FrontDoors.Add(prod);
         result.WafPolicies.Add(new WafPolicyInfo
@@ -173,7 +184,8 @@ public static class DemoDataService
                 new() { Id = prodId + "/httpListeners/https-api", Name = "https-api", HostName = "api.contoso.com", Detail = "HTTPS" },
                 new() { Id = prodId + "/httpListeners/http-redirect", Name = "http-redirect", HostName = "portal.contoso.com", Detail = "HTTP" },
             ],
-            WafLogsEnabled = true, LogDestinations = ["Log Analytics: law-contoso-prod"]
+            // Two diagnostic settings: the firewall log goes to the security workspace (other subscription), everything else to prod.
+            WafLogsEnabled = true, LogDestinations = ["Log Analytics: law-contoso-security"], LogWorkspaceIds = [LawSecurityId]
         });
         result.WafPolicies.Add(new WafPolicyInfo
         {
