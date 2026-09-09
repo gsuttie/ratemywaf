@@ -1,0 +1,252 @@
+@inject WafFlowService Flows
+@inject IJSRuntime JS
+
+@if (Scan is null)
+{
+    <div class="card empty"><p>No scan yet. <a href="/@Flow.Route()">Choose a scope</a> first.</p></div>
+    return;
+}
+
+<div class="card">
+    <div class="card-head">
+        <h2 class="card-title">3 · Analyse the WAF logs</h2>
+        <span class="muted small">Needs WAF logs flowing to a Log Analytics workspace. Report only.</span>
+    </div>
+    <p class="muted small">
+        Pick a @Flow.Label() and its policies. You get what changed against the previous period, which alerts look like
+        false positives versus real attacks, and concrete recommendations such as scoped exclusions.
+    </p>
+
+    <div class="picker">
+        <label class="field grow">
+            <span class="field-label">@Flow.Label()</span>
+            <select class="select" value="@_targetId" @onchange="OnTargetChanged" disabled="@_running">
+                @foreach (var t in Targets)
+                {
+                    <option value="@t.Id">@t.Name (@t.Sku)</option>
+                }
+            </select>
+        </label>
+        <label class="field">
+            <span class="field-label">Time range</span>
+            <select class="select" @bind="_timeRange" disabled="@_running">
+                @foreach (var (key, label) in WafLogAnalysisService.TimeRanges)
+                {
+                    <option value="@key">@label</option>
+                }
+            </select>
+        </label>
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_running || _selectedPolicies.Count == 0)">
+            @if (_running) { <span class="spinner sm light"></span> <span>Analysing…</span> }
+            else { <Icon Name="logs" Size="16" /> <span>Analyse logs</span> }
+        </button>
+    </div>
+
+    @if (Linked.Count == 0)
+    {
+        <div class="notice notice-info"><Icon Name="info" Size="16" /><span class="small">No WAF policy is linked to this @Flow.Label(), so there is nothing to analyse.</span></div>
+    }
+    else
+    {
+        <div class="policy-picks">
+            <span class="field-label">Policies</span>
+            @foreach (var p in Linked)
+            {
+                <label class="check"><input type="checkbox" checked="@_selectedPolicies.Contains(p.Id)" @onchange="() => TogglePolicy(p.Id)" disabled="@_running" /> @p.Name <span class="muted small">· @(p.IsEnabled ? p.Mode : "Disabled")</span></label>
+            }
+        </div>
+    }
+
+    @{ var (logsOn, dests) = Logging(_targetId); }
+    @if (logsOn == false)
+    {
+        <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">WAF logging is <b>disabled</b> for this @Flow.Label() — there are no logs to analyse.</span></div>
+    }
+    else if (logsOn == true && !dests.Any(d => d.StartsWith("Log Analytics", StringComparison.OrdinalIgnoreCase)))
+    {
+        <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">WAF logs go to <b>@string.Join(" · ", dests)</b> but not to a Log Analytics workspace, so the query may return no data.</span></div>
+    }
+</div>
+
+@if (Result is { LogsQueryable: false })
+{
+    <div class="notice notice-error"><Icon Name="warn" Size="18" /><div><b>Logs could not be queried.</b><div class="small">@Result.QueryError</div></div></div>
+}
+else if (Result is not null)
+{
+    <div class="results-bar">
+        <span class="muted small"><b>@Result.TargetName</b> · @string.Join(", ", Result.PolicyNames) · @Result.TimeRangeLabel @if (Flows.State.DemoMode) { <span class="pill pill-demo sm">sample</span> }</span>
+        <span class="results-actions">
+            <button class="btn btn-ghost btn-sm" @onclick="() => _changesOpen = true"><Icon Name="refresh" Size="14" /> Changes vs previous period <span class="count">@Result.Changes.Count</span></button>
+            <button class="btn btn-ghost btn-sm" @onclick="() => _report.Open(false)"><Icon Name="doc" Size="14" /> Summary report</button>
+            <button class="btn btn-ghost btn-sm" @onclick="() => _report.Open(true)"><Icon Name="doc" Size="14" /> Detailed report</button>
+        </span>
+    </div>
+
+    @foreach (var w in Result.Warnings)
+    {
+        <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">@w</span></div>
+    }
+
+    <div class="stat-tiles six">
+        <div class="stat"><span class="stat-num">@Result.TotalEvents.ToString("N0")</span><span class="stat-lbl">WAF events</span></div>
+        <div class="stat"><span class="stat-num bad">@Result.BlockedCount.ToString("N0")</span><span class="stat-lbl">Blocked</span></div>
+        <div class="stat"><span class="stat-num info">@Result.LoggedCount.ToString("N0")</span><span class="stat-lbl">Logged</span></div>
+        <div class="stat"><span class="stat-num ok">@Result.AllowedCount.ToString("N0")</span><span class="stat-lbl">Allowed</span></div>
+        <div class="stat"><span class="stat-num">@Result.RedirectedCount.ToString("N0")</span><span class="stat-lbl">Redirected</span></div>
+        <div class="stat"><span class="stat-num">@Result.DistinctRules</span><span class="stat-lbl">Rules triggered</span></div>
+    </div>
+
+    @if (Result.TotalEvents == 0)
+    {
+        <div class="card empty"><p class="ok"><Icon Name="check" Size="16" /> No WAF events for the selected polic@(Result.PolicyNames.Count == 1 ? "y" : "ies") in the @Result.TimeRangeLabel.</p></div>
+    }
+    else
+    {
+        <h3 class="section-title">Alert assessment <span class="count">@Result.RuleActivities.Count</span></h3>
+        @foreach (var a in Result.RuleActivities)
+        {
+            var cls = ClassCss(a.Classification);
+            <article class="card activity @cls">
+                <div class="activity-head">
+                    <span class="class-pill @cls">@a.Classification</span>
+                    <b>@a.RuleName</b>
+                    @if (!string.IsNullOrEmpty(a.PolicyName)) { <span class="muted small">policy: @a.PolicyName</span> }
+                    <span class="ml-auto muted small">@a.Count.ToString("N0") events</span>
+                </div>
+                <p class="small">@a.Explanation</p>
+                <div class="samples">
+                    @if (a.SampleIps.Count > 0)
+                    {
+                        <div><span class="muted small">Sample IPs</span><div class="mono small">@string.Join(", ", a.SampleIps)</div></div>
+                    }
+                    @if (a.SampleUris.Count > 0)
+                    {
+                        <div><span class="muted small">Sample URIs</span>@foreach (var u in a.SampleUris.Take(3)) { <div class="mono small trunc" title="@u">@u</div> }</div>
+                    }
+                    @if (!string.IsNullOrEmpty(a.SampleMatchVariable) || !string.IsNullOrEmpty(a.SampleMatchData))
+                    {
+                        <div><span class="muted small">Match detail</span><div class="mono small trunc" title="@a.SampleMatchVariable @a.SampleMatchData">@a.SampleMatchVariable @a.SampleMatchData</div></div>
+                    }
+                </div>
+                @if (a.Recommendations.Count > 0)
+                {
+                    <ul class="recs small">
+                        @foreach (var r in a.Recommendations) { <li><Icon Name="bolt" Size="12" /> @r</li> }
+                    </ul>
+                }
+                <div class="activity-foot">
+                    <button class="btn btn-ghost btn-sm" @onclick="() => OpenFix(a)"><Icon Name="terminal" Size="14" /> Fix script</button>
+                </div>
+            </article>
+        }
+    }
+}
+
+<div class="actions end">
+    <a class="btn btn-ghost" href="/@Flow.Route()/grades"><Icon Name="back" Size="16" /> Back to grades</a>
+</div>
+
+<Modal Visible="_changesOpen" Title="@($"Changes vs the previous {Result?.TimeRangeLabel.Replace("last ", "")}")" OnClose="() => _changesOpen = false">
+    @if (Result is null || Result.Changes.Count == 0)
+    {
+        <p class="muted">No significant changes — the same rules triggered at similar volumes in both periods.</p>
+    }
+    else
+    {
+        <ul class="changes">
+            @foreach (var c in Result.Changes)
+            {
+                <li><span class="change @ChangeCss(c.ChangeType)">@c.ChangeType</span> <b>@c.RuleName</b> <span class="small">— @c.Description</span></li>
+            }
+        </ul>
+    }
+</Modal>
+
+<FixScriptModal @ref="_fix" Flow="Flow" />
+<ReportModal @ref="_report" Flow="Flow" />
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+
+    private ReportModal _report = default!;
+    private FixScriptModal _fix = default!;
+    private string _targetId = "";
+    private string _timeRange = "24h";
+    private readonly HashSet<string> _selectedPolicies = new(StringComparer.OrdinalIgnoreCase);
+    private bool _running;
+    private bool _changesOpen;
+
+    private FlowState State => Flows.State.For(Flow);
+    private WafScanResult? Scan => State.Scan;
+    private WafLogAnalysis? Result => State.LogAnalysis;
+
+    private List<(string Id, string Name, string Sku)> Targets => Scan is null ? [] :
+        Scan.FrontDoors.Where(f => f.HasWafAssociation).Select(f => (f.Id, f.Name, f.SkuName))
+            .Concat(Scan.AppGateways.Where(g => g.HasWaf).Select(g => (g.Id, g.Name, g.Tier)))
+            .OrderBy(t => t.Item2, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private List<WafPolicyInfo> Linked => Scan is null || string.IsNullOrEmpty(_targetId) ? [] : WafFlowService.LinkedPolicies(Scan, _targetId);
+
+    protected override void OnInitialized()
+    {
+        var initial = Targets.FirstOrDefault(t => t.Id.Equals(Result?.TargetId, StringComparison.OrdinalIgnoreCase));
+        if (initial.Id is null) initial = Targets.FirstOrDefault();
+        if (initial.Id is not null) SelectTarget(initial.Id);
+        if (Result is not null) _timeRange = Result.TimeRangeKey;
+    }
+
+    private void OnTargetChanged(ChangeEventArgs e) => SelectTarget(e.Value?.ToString() ?? "");
+
+    private void SelectTarget(string id)
+    {
+        _targetId = id;
+        _selectedPolicies.Clear();
+        foreach (var p in Linked) _selectedPolicies.Add(p.Id);
+    }
+
+    private void TogglePolicy(string id) { if (!_selectedPolicies.Remove(id)) _selectedPolicies.Add(id); }
+
+    private (bool? On, List<string> Dests) Logging(string id)
+    {
+        var fd = Scan?.FrontDoors.FirstOrDefault(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        if (fd is not null) return (fd.WafLogsEnabled, fd.LogDestinations);
+        var gw = Scan?.AppGateways.FirstOrDefault(g => g.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        return gw is not null ? (gw.WafLogsEnabled, gw.LogDestinations) : (null, []);
+    }
+
+    private async Task RunAsync()
+    {
+        var target = Targets.FirstOrDefault(t => t.Id.Equals(_targetId, StringComparison.OrdinalIgnoreCase));
+        if (target.Id is null) return;
+        _running = true;
+        StateHasChanged();
+        try
+        {
+            var policies = Linked.Where(p => _selectedPolicies.Contains(p.Id)).ToList();
+            await Flows.AnalyzeLogsAsync(Flow, target.Id, target.Name, policies, _timeRange);
+        }
+        catch (Exception ex)
+        {
+            State.LogAnalysis = new WafLogAnalysis { Flow = Flow, TargetId = target.Id, TargetName = target.Name, LogsQueryable = false, QueryError = ex.Message };
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private void OpenFix(WafRuleActivity a) => _fix.Open(a);
+
+    private static string ClassCss(string classification) => classification switch
+    {
+        "Likely real attack" => "attack",
+        "Possible false positive" => "fp",
+        _ => "review"
+    };
+
+    private static string ChangeCss(string type) => type.ToLowerInvariant() switch
+    {
+        "new" => "new", "now blocking" => "blocking", "now log-only" => "logonly", "stopped" => "stopped", "increased" => "increased", _ => "decreased"
+    };
+}

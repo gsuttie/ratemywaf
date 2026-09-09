@@ -1,0 +1,53 @@
+@inject IJSRuntime JS
+
+<Modal Visible="_visible" Title="@($"Fix script — {_activity?.RuleName}")" Wide="true" OnClose="Close">
+    @if (_activity is not null)
+    {
+        <p class="small muted">@_explanation</p>
+        <div class="fix-options">
+            @foreach (var o in _options)
+            {
+                <label class="check"><input type="checkbox" checked="@o.Enabled" @onchange="() => ToggleOption(o.Key)" /> @o.Label</label>
+            }
+        </div>
+        <div class="script-wrap">
+            <pre class="script">@Script</pre>
+            <button class="btn btn-ghost btn-sm copy" @onclick="CopyAsync"><Icon Name="@(_copied ? "check" : "copy")" Size="14" /> @(_copied ? "Copied" : "Copy")</button>
+        </div>
+        <p class="small muted">The script is a starting point for a change you make deliberately, in your own session. RateMyWAF itself never modifies Azure.</p>
+    }
+</Modal>
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+
+    private bool _visible;
+    private bool _copied;
+    private WafRuleActivity? _activity;
+    private string _explanation = "";
+    private List<FixScriptService.FixOption> _options = [];
+
+    private string Script => _activity is null ? "" : FixScriptService.Generate(_activity, Flow, _options);
+
+    public void Open(WafRuleActivity activity)
+    {
+        _activity = activity;
+        (_explanation, _options) = FixScriptService.Describe(activity, Flow);
+        _copied = false;
+        _visible = true;
+        StateHasChanged();
+    }
+
+    private void Close() { _visible = false; _activity = null; }
+
+    private void ToggleOption(string key)
+    {
+        _options = _options.Select(o => o.Key == key ? o with { Enabled = !o.Enabled } : o).ToList();
+        _copied = false;
+    }
+
+    private async Task CopyAsync()
+    {
+        _copied = await JS.InvokeAsync<bool>("rmw.copy", Script);
+    }
+}

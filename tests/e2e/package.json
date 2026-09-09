@@ -1,0 +1,12 @@
+{
+  "name": "ratemywaf-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Headless-browser walkthrough of RateMyWAF in sample-data mode (both flows, reports, logs, fix scripts, reload, dark theme, mobile).",
+  "scripts": {
+    "test": "node walkthrough.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

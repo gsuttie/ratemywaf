@@ -1,0 +1,56 @@
+@inherits LayoutComponentBase
+@inject NavigationManager Nav
+@inject SessionState State
+@inject WafFlowService Flows
+@inject IJSRuntime JS
+
+<header class="topbar">
+    <div class="topbar-inner">
+        <a class="brand" href="/">
+            <Icon Name="shield" Size="26" />
+            <span>Rate<b>My</b>WAF</span>
+        </a>
+        <nav class="flow-tabs">
+            <a class="flow-tab @(IsActive("front-door") ? "active" : "")" href="/front-door">
+                <Icon Name="door" Size="16" /> Front Door WAFs
+            </a>
+            <a class="flow-tab @(IsActive("app-gateway") ? "active" : "")" href="/app-gateway">
+                <Icon Name="gateway" Size="16" /> Application Gateway WAFs
+            </a>
+        </nav>
+        <div class="topbar-right">
+            @if (State.DemoMode)
+            {
+                <button class="pill pill-demo" title="Sample data is shown. Click to switch back to Azure." @onclick="LeaveDemo">Sample data</button>
+            }
+            <button class="icon-btn" title="Toggle light / dark" onclick="rmw.toggleTheme()">
+                <Icon Name="theme" Size="18" />
+            </button>
+        </div>
+    </div>
+</header>
+
+<main class="page">
+    @Body
+</main>
+
+<footer class="footer">
+    Read-only assessment: RateMyWAF never changes an Azure resource. Grades follow the WAFFLOW scoring model (100 points, six weighted categories, hard caps).
+</footer>
+
+<div id="blazor-error-ui" class="blazor-error">
+    Something went wrong on the server. <a href="" class="reload">Reload</a>
+    <a class="dismiss">✕</a>
+</div>
+
+@code {
+    private bool IsActive(string route) =>
+        Nav.ToBaseRelativePath(Nav.Uri).StartsWith(route, StringComparison.OrdinalIgnoreCase);
+
+    private async Task LeaveDemo()
+    {
+        Flows.ExitDemoMode();
+        try { await JS.InvokeVoidAsync("rmw.setItem", "rmw.demo", null); } catch { }
+        Nav.NavigateTo("/", forceLoad: false);
+    }
+}

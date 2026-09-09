@@ -1,0 +1,62 @@
+@inject WafFlowService Flows
+@inject IJSRuntime JS
+
+<Modal Visible="_visible" Title="@(_findings ? "Detailed findings report" : "Summary report")" Wide="true" OnClose="Close">
+    <ChildContent>
+        <div class="report-tabs">
+            <button class="tab @(_findings ? "" : "active")" @onclick="() => Switch(false)">Summary</button>
+            <button class="tab @(_findings ? "active" : "")" @onclick="() => Switch(true)">Detailed findings</button>
+        </div>
+        <div class="report-preview">@((MarkupString)_html)</div>
+    </ChildContent>
+    <Footer>
+        <span class="muted small">Word document, generated from the same content as this preview.</span>
+        <button class="btn btn-primary" @onclick="DownloadAsync" disabled="@_downloading">
+            @if (_downloading) { <span class="spinner sm light"></span> } else { <Icon Name="doc" Size="16" /> }
+            Download .docx
+        </button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+
+    private bool _visible;
+    private bool _findings;
+    private bool _downloading;
+    private string _html = "";
+
+    public void Open(bool findings)
+    {
+        _findings = findings;
+        Render();
+        _visible = true;
+        StateHasChanged();
+    }
+
+    private void Switch(bool findings) { _findings = findings; Render(); }
+
+    private void Render()
+    {
+        var ctx = Flows.ReportContext(Flow);
+        _html = _findings ? WafReportService.FindingsHtml(ctx) : WafReportService.SummaryHtml(ctx);
+    }
+
+    private void Close() => _visible = false;
+
+    private async Task DownloadAsync()
+    {
+        _downloading = true;
+        try
+        {
+            var ctx = Flows.ReportContext(Flow);
+            var bytes = _findings ? WafReportService.FindingsDocx(ctx) : WafReportService.SummaryDocx(ctx);
+            await JS.InvokeVoidAsync("rmw.download", WafReportService.FileName(ctx, _findings), Convert.ToBase64String(bytes),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+        finally
+        {
+            _downloading = false;
+        }
+    }
+}

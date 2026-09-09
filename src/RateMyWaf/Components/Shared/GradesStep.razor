@@ -1,0 +1,366 @@
+@inject WafFlowService Flows
+@inject NavigationManager Nav
+
+@if (Scan is null)
+{
+    <div class="card empty"><p>No scan yet. <a href="/@Flow.Route()">Choose a scope</a> first.</p></div>
+    return;
+}
+
+<div class="results-bar">
+    <span class="muted small">
+        Scanned @Scan.SubscriptionIds.Count subscription@(Scan.SubscriptionIds.Count == 1 ? "" : "s") · @Scan.CompletedAt.ToString("yyyy-MM-dd HH:mm")
+        @if (Flows.State.DemoMode) { <span class="pill pill-demo sm">sample</span> }
+    </span>
+    <span class="results-actions">
+        <a class="btn btn-ghost btn-sm" href="/@Flow.Route()"><Icon Name="refresh" Size="14" /> Rescan</a>
+        <button class="btn btn-ghost btn-sm" @onclick="() => _report.Open(false)"><Icon Name="doc" Size="14" /> Summary report</button>
+        <button class="btn btn-ghost btn-sm" @onclick="() => _report.Open(true)"><Icon Name="doc" Size="14" /> Detailed report</button>
+        @if (HasLogTargets)
+        {
+            <a class="btn btn-primary btn-sm" href="/@Flow.Route()/logs"><Icon Name="logs" Size="14" /> Analyse logs</a>
+        }
+    </span>
+</div>
+
+@foreach (var w in Scan.Warnings.Distinct())
+{
+    <div class="notice notice-warn"><Icon Name="warn" Size="16" /><span class="small">@w</span></div>
+}
+
+@if (Scan.Ratings.Count == 0)
+{
+    <div class="card empty">
+        <h2>No @Flow.PluralLabel() found</h2>
+        <p class="muted">The selected subscriptions contain no @Flow.PluralLabel() to rate.
+            @if (Scan.WafPolicies.Count > 0) { <span>@Scan.WafPolicies.Count WAF polic@(Scan.WafPolicies.Count == 1 ? "y was" : "ies were") found; see below.</span> }
+        </p>
+    </div>
+}
+else
+{
+    var worst = WafRatingService.Worst(Scan.Ratings)!;
+    var avg = (int)Math.Round(Scan.Ratings.Average(r => r.Score));
+    <section class="card overall">
+        <div class="overall-grade">
+            <GradeBadge Grade="@worst.Grade" Large="true" />
+            <div>
+                <div class="overall-label" style="color:@WafRatingService.ColorForGrade(worst.Grade);">@worst.GradeLabel.ToUpperInvariant()</div>
+                <div class="muted small">
+                    @if (Scan.Ratings.Count == 1)
+                    {
+                        <span>'@worst.TargetName' scores @worst.Score/100.</span>
+                    }
+                    else
+                    {
+                        <span>The weakest @Flow.Label() sets the grade ('@worst.TargetName', @worst.Score/100). Average @avg/100 across @Scan.Ratings.Count @Flow.PluralLabel().</span>
+                    }
+                </div>
+                <button class="link small" @onclick="() => _showLegend = !_showLegend">@(_showLegend ? "Hide" : "Show") the A–F legend</button>
+            </div>
+        </div>
+        <div class="stat-tiles">
+            <div class="stat"><span class="stat-num">@Scan.EdgeCount</span><span class="stat-lbl">@Flow.PluralLabel()</span></div>
+            <div class="stat"><span class="stat-num">@Scan.WafPolicies.Count</span><span class="stat-lbl">WAF policies</span></div>
+            <div class="stat"><span class="stat-num @(Outdated > 0 ? "warn" : "ok")">@Outdated</span><span class="stat-lbl">Outdated rule sets</span></div>
+            <div class="stat"><span class="stat-num @(HighFindings > 0 ? "bad" : "ok")">@HighFindings</span><span class="stat-lbl">High findings</span></div>
+        </div>
+        @if (_showLegend)
+        {
+            <div class="legend-grid mt">
+                @foreach (var (g, label, desc) in WafRatingService.Legend)
+                {
+                    <div class="legend-row" style="background:@(WafRatingService.ColorForGrade(g))1A;">
+                        <GradeBadge Grade="@g" Small="true" />
+                        <div><b style="color:@WafRatingService.ColorForGrade(g);">@label</b><div class="small">@desc</div></div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="rating-list">
+        @foreach (var r in Scan.Ratings.OrderByDescending(r => r.Grade, StringComparer.Ordinal).ThenBy(r => r.Score).ThenBy(r => r.TargetName, StringComparer.OrdinalIgnoreCase))
+        {
+            var open = _expanded.Contains(r.TargetId);
+            <article class="card rating @(open ? "open" : "")">
+                <button class="rating-row" @onclick="() => Toggle(r.TargetId)" aria-expanded="@open">
+                    <GradeBadge Grade="@r.Grade" />
+                    <span class="rating-name">
+                        <b>@r.TargetName</b>
+                        <span class="chips">
+                            <span class="chip">@SkuLabel(r.TargetId)</span>
+                            <span class="chip muted">@Flows.SubscriptionName(r.SubscriptionId)</span>
+                        </span>
+                    </span>
+                    <span class="rating-bar"><span style="width:@r.Score%;background:@WafRatingService.ColorForGrade(r.Grade);"></span></span>
+                    <span class="rating-score">@r.Score<span class="muted">/100</span></span>
+                    <Icon Name="@(open ? "down" : "chevron")" Size="18" Class="muted" />
+                </button>
+
+                @if (r.CapReason is not null)
+                {
+                    <div class="cap"><Icon Name="lock" Size="14" /> Grade capped: @r.CapReason</div>
+                }
+                @if (!open && r.Improvements.Count > 0)
+                {
+                    <div class="next-fix"><Icon Name="bolt" Size="14" /> Biggest win: @r.Improvements[0].Action <span class="pts">+@r.Improvements[0].PointsGained</span></div>
+                }
+
+                @if (open)
+                {
+                    <div class="rating-detail">
+                        <div class="detail-grid">
+                            <div>
+                                <h4>Score breakdown</h4>
+                                <table class="cats">
+                                    @foreach (var c in r.Categories)
+                                    {
+                                        <tr>
+                                            <td class="cat-name">@c.Name</td>
+                                            <td class="cat-bar"><span><span style="width:@(c.Possible == 0 ? 0 : c.Earned * 100 / c.Possible)%;" class="@(c.Earned == c.Possible ? "full" : c.Earned == 0 ? "none" : "")"></span></span></td>
+                                            <td class="cat-score @(c.Earned == c.Possible ? "ok" : c.Earned == 0 ? "bad" : "")">@c.Earned<span class="muted">/@c.Possible</span></td>
+                                            <td class="cat-notes muted">@string.Join(" ", c.Details)</td>
+                                        </tr>
+                                    }
+                                </table>
+                            </div>
+                            <div>
+                                <h4>How to improve</h4>
+                                @if (r.Improvements.Count == 0)
+                                {
+                                    <p class="ok small"><Icon Name="check" Size="14" /> Nothing to improve — full marks.</p>
+                                }
+                                else
+                                {
+                                    <ol class="improvements">
+                                        @foreach (var imp in r.Improvements)
+                                        {
+                                            <li>
+                                                <span class="pts">+@imp.PointsGained</span>
+                                                <span>@imp.Action
+                                                    @if (WafRatingService.WorstGrade(imp.ResultingGrade, r.Grade) != imp.ResultingGrade)
+                                                    {
+                                                        <b style="color:@WafRatingService.ColorForGrade(imp.ResultingGrade);"> → grade @imp.ResultingGrade</b>
+                                                    }
+                                                </span>
+                                            </li>
+                                        }
+                                    </ol>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="detail-grid">
+                            <div>
+                                <h4>@SurfaceTitle(r.TargetId)</h4>
+                                @{ var surfaces = Surfaces(r.TargetId); }
+                                @if (surfaces.Count == 0)
+                                {
+                                    <p class="muted small">@NoSurfaceText(r.TargetId)</p>
+                                }
+                                else
+                                {
+                                    <ul class="surfaces">
+                                        @foreach (var s in surfaces)
+                                        {
+                                            <li class="@(s.WafPolicyId is null ? "bad" : "ok")">
+                                                <Icon Name="@(s.WafPolicyId is null ? "x" : "check")" Size="14" />
+                                                <span class="mono">@s.Display</span>
+                                                @if (!string.IsNullOrEmpty(s.Detail)) { <span class="chip">@s.Detail</span> }
+                                                @if (s.IsCustomDomain) { <span class="chip">custom domain</span> }
+                                                <span class="muted small">@(s.WafPolicyId is null ? "no WAF" : PolicyName(s.WafPolicyId))</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <div>
+                                <h4>WAF policies &amp; logging</h4>
+                                @{ var linked = WafFlowService.LinkedPolicies(Scan, r.TargetId); }
+                                @if (linked.Count == 0)
+                                {
+                                    <p class="muted small">No WAF policy is linked to this @Flow.Label().</p>
+                                }
+                                else
+                                {
+                                    <ul class="policy-chips">
+                                        @foreach (var p in linked)
+                                        {
+                                            <li><button class="chip chip-btn" @onclick="() => TogglePolicy(p.Id)"><Icon Name="lock" Size="12" /> @p.Name <span class="muted">· @(p.IsEnabled ? p.Mode : "Disabled")</span></button></li>
+                                        }
+                                    </ul>
+                                }
+                                <p class="small mt">
+                                    @{ var (logsOn, dests) = Logging(r.TargetId); }
+                                    <b>WAF logs:</b><span>&nbsp;</span>
+                                    @if (logsOn == true) { <span class="ok">enabled</span> <span class="muted">→ @(dests.Count > 0 ? string.Join(" · ", dests) : "destination unknown")</span> }
+                                    else if (logsOn == false) { <span class="bad">disabled</span> }
+                                    else { <span class="muted">unknown</span> }
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </article>
+        }
+    </section>
+}
+
+<section class="card">
+    <div class="card-head">
+        <h2 class="card-title">Findings <span class="count">@Scan.Findings.Count</span></h2>
+        <span class="muted small">Report only — nothing is changed. Each finding comes with its fix.</span>
+    </div>
+    @if (Scan.Findings.Count == 0)
+    {
+        <p class="ok"><Icon Name="check" Size="16" /> No issues found — every policy is enabled, attached, logging and on the latest rule sets.</p>
+    }
+    else
+    {
+        @foreach (var group in Scan.Findings.GroupBy(f => f.Severity).OrderBy(g => WafFindingsBuilder.SeverityOrder(g.Key)))
+        {
+            <h4 class="sev-head"><span class="sev @group.Key.ToLowerInvariant()">@group.Key</span> <span class="muted">@SeverityHeading(group.Key) · @group.Count()</span></h4>
+            <ul class="findings">
+                @foreach (var f in group)
+                {
+                    var key = f.ResourceId + "|" + f.Category + "|" + f.Message;
+                    var openFix = _openFixes.Contains(key);
+                    <li>
+                        <div class="finding-main">
+                            <span class="finding-cat">@f.Category</span>
+                            <span class="finding-msg">@f.Message</span>
+                            <span class="muted small">@Flows.SubscriptionName(f.SubscriptionId)</span>
+                        </div>
+                        <button class="link small" @onclick="() => ToggleFix(key)">@(openFix ? "Hide fix" : "How to fix")</button>
+                        @if (openFix)
+                        {
+                            <div class="fix"><Icon Name="bolt" Size="14" /> @f.Fix</div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    }
+</section>
+
+<section class="card">
+    <div class="card-head">
+        <h2 class="card-title">WAF policies <span class="count">@Scan.WafPolicies.Count</span></h2>
+        <span class="muted small">Click a policy for rule sets, custom rules, settings and what it protects.</span>
+    </div>
+    @if (Scan.WafPolicies.Count == 0)
+    {
+        <p class="muted">No WAF policies in scope.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="table policies">
+                <thead>
+                    <tr><th></th><th>Policy</th><th>State</th><th>Mode</th><th>Managed rule sets</th><th class="num">Custom rules</th><th>Protects</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in Scan.WafPolicies.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var open = _expandedPolicies.Contains(p.Id);
+                        <tr class="policy-row @(open ? "open" : "")" @onclick="() => TogglePolicy(p.Id)">
+                            <td><Icon Name="@(open ? "down" : "chevron")" Size="16" Class="muted" /></td>
+                            <td><b>@p.Name</b>@if (p.IsLegacyInline) { <span class="chip warn">legacy inline</span> }<div class="muted small">@Flows.SubscriptionName(p.SubscriptionId)</div></td>
+                            <td>@(p.IsEnabled ? Badge("Enabled", "ok") : Badge("Disabled", "bad"))</td>
+                            <td>@(p.IsPrevention ? Badge("Prevention", "ok") : string.IsNullOrEmpty(p.Mode) ? Badge("—", "") : Badge("Detection", "warn"))</td>
+                            <td>
+                                @if (p.ManagedRuleSets.Count == 0) { <span class="muted small">none</span> }
+                                @foreach (var rs in p.ManagedRuleSets)
+                                {
+                                    @RuleSetBadge(rs)
+                                }
+                            </td>
+                            <td class="num">@p.CustomRuleCount</td>
+                            <td class="small">@(p.ProtectedResourceNames.Any() ? string.Join(", ", p.ProtectedResourceNames) : "not linked")</td>
+                        </tr>
+                        @if (open)
+                        {
+                            <tr class="policy-detail-row"><td colspan="7"><PolicyDetail Policy="p" /></td></tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<div class="actions end">
+    @if (HasLogTargets)
+    {
+        <a class="btn btn-primary" href="/@Flow.Route()/logs"><Icon Name="logs" Size="16" /> Analyse the WAF logs <Icon Name="arrow" Size="16" /></a>
+    }
+</div>
+
+<ReportModal @ref="_report" Flow="Flow" />
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+
+    private ReportModal _report = default!;
+    private bool _showLegend;
+    private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _expandedPolicies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _openFixes = new(StringComparer.OrdinalIgnoreCase);
+
+    private WafScanResult? Scan => Flows.State.For(Flow).Scan;
+
+    private int Outdated => Scan?.WafPolicies.Sum(p => p.ManagedRuleSets.Count(r => r.IsLatest == false)) ?? 0;
+    private int HighFindings => Scan?.Findings.Count(f => f.Severity == "High") ?? 0;
+    private bool HasLogTargets => Scan is { } s && (s.FrontDoors.Any(f => f.HasWafAssociation) || s.AppGateways.Any(g => g.HasWaf));
+
+    protected override void OnInitialized()
+    {
+        // Open the weakest resource by default so the first thing on screen is what to fix.
+        if (Scan is { Ratings.Count: > 0 } && _expanded.Count == 0)
+            _expanded.Add(WafRatingService.Worst(Scan.Ratings)!.TargetId);
+    }
+
+    private void Toggle(string id) { if (!_expanded.Remove(id)) _expanded.Add(id); }
+    private void TogglePolicy(string id) { if (!_expandedPolicies.Remove(id)) _expandedPolicies.Add(id); }
+    private void ToggleFix(string key) { if (!_openFixes.Remove(key)) _openFixes.Add(key); }
+
+    private FrontDoorInfo? Fd(string id) => Scan?.FrontDoors.FirstOrDefault(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    private AppGatewayInfo? Gw(string id) => Scan?.AppGateways.FirstOrDefault(g => g.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+    private string SkuLabel(string id) => Fd(id)?.SkuName ?? Gw(id)?.Tier ?? "";
+
+    private List<WafSurfaceInfo> Surfaces(string id) => Fd(id)?.Endpoints ?? Gw(id)?.Listeners ?? [];
+
+    private string SurfaceTitle(string id) => Fd(id) is { } fd
+        ? (fd.Kind == FrontDoorKind.Classic ? "Frontend endpoints" : "Endpoints & custom domains")
+        : "Listeners";
+
+    private string NoSurfaceText(string id) => Fd(id) is not null
+        ? "No endpoints or domains could be listed; coverage was rated on the policy association."
+        : "No listeners were returned for this gateway; coverage was rated on the policy association.";
+
+    private (bool? On, List<string> Dests) Logging(string id) =>
+        Fd(id) is { } fd ? (fd.WafLogsEnabled, fd.LogDestinations) : Gw(id) is { } gw ? (gw.WafLogsEnabled, gw.LogDestinations) : (null, []);
+
+    private string PolicyName(string policyId) =>
+        Scan?.WafPolicies.FirstOrDefault(p => p.Id.Equals(policyId, StringComparison.OrdinalIgnoreCase))?.Name
+        ?? Services.Azure.Json.LastSegment(policyId);
+
+    private static string SeverityHeading(string severity) => severity switch
+    {
+        "High" => "Fix first", "Medium" => "Fix soon", _ => "Worth reviewing"
+    };
+
+    private static RenderFragment Badge(string text, string cls) => __builder =>
+    {
+        <span class="badge @cls">@text</span>
+    };
+
+    private static RenderFragment RuleSetBadge(ManagedRuleSetInfo rs) => __builder =>
+    {
+        var cls = rs.IsLatest switch { true => "ok", false => "warn", null => "" };
+        var title = rs.IsLatest switch { true => "Latest version", false => $"Latest available: {rs.LatestVersion}", null => "Latest version unknown" };
+        <span class="badge rs @cls" title="@title">@rs.RuleSetType @rs.RuleSetVersion@(rs.IsLatest == false ? $" → {rs.LatestVersion}" : "")</span>
+    };
+}

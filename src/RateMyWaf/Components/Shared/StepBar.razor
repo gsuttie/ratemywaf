@@ -1,0 +1,51 @@
+@inject NavigationManager Nav
+
+<ol class="stepbar" aria-label="Steps">
+    @for (var i = 0; i < Steps.Length; i++)
+    {
+        var (key, label, hint) = Steps[i];
+        var n = i + 1;
+        var state = key == Current ? "active" : Reachable(key) ? (Index(key) < Index(Current) ? "done" : "ready") : "locked";
+        <li class="step @state">
+            @if (state is "done" or "ready")
+            {
+                <a href="/@Route/@key" title="@hint"><span class="step-num">@(state == "done" ? "✓" : n.ToString())</span><span class="step-label">@label</span></a>
+            }
+            else
+            {
+                <span title="@(state == "locked" ? LockedHint(key) : hint)"><span class="step-num">@n</span><span class="step-label">@label</span></span>
+            }
+        </li>
+        @if (i < Steps.Length - 1)
+        {
+            <li class="step-line @(Index(key) < Index(Current) ? "done" : "")" aria-hidden="true"></li>
+        }
+    }
+</ol>
+
+@code {
+    [Parameter] public string Route { get; set; } = "front-door";
+    [Parameter] public string Current { get; set; } = "scope";
+    [Parameter] public bool HasScan { get; set; }
+    [Parameter] public bool HasLogTargets { get; set; }
+
+    private static readonly (string Key, string Label, string Hint)[] Steps =
+    [
+        ("scope", "Scope", "Choose the subscriptions to scan"),
+        ("grades", "Grades", "A-F grade per resource, findings and fixes"),
+        ("logs", "Logs", "Analyse the WAF logs"),
+    ];
+
+    private static int Index(string key) => Array.FindIndex(Steps, s => s.Key == key);
+
+    private bool Reachable(string key) => key switch
+    {
+        "scope" => true,
+        "grades" => HasScan,
+        _ => HasScan && HasLogTargets,
+    };
+
+    private string LockedHint(string key) => key == "logs" && HasScan
+        ? "No resource with a WAF to analyse"
+        : "Run a scan first";
+}

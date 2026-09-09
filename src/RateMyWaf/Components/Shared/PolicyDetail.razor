@@ -1,0 +1,103 @@
+@* Full detail for one WAF policy: settings, managed rule sets with overrides, custom rules, associations. *@
+<div class="policy-detail">
+    <div class="detail-grid">
+        <div>
+            <h4>Settings</h4>
+            <dl class="kv">
+                <dt>State</dt><dd>@(string.IsNullOrEmpty(Policy.EnabledState) ? "Enabled" : Policy.EnabledState)</dd>
+                <dt>Mode</dt><dd>@(Policy.IsPrevention ? "Prevention — matching requests are blocked" : string.IsNullOrEmpty(Policy.Mode) ? "—" : "Detection — matching requests are only logged")</dd>
+                @if (!string.IsNullOrEmpty(Policy.SkuName)) { <dt>SKU</dt><dd>@Policy.SkuName</dd> }
+                <dt>Resource group</dt><dd>@Policy.ResourceGroup</dd>
+                @if (!string.IsNullOrEmpty(Policy.RequestBodyCheck)) { <dt>Request body inspection</dt><dd>@Policy.RequestBodyCheck</dd> }
+                @if (Policy.MaxRequestBodySizeKb.HasValue) { <dt>Max request body</dt><dd>@Policy.MaxRequestBodySizeKb KB</dd> }
+                @if (Policy.FileUploadLimitMb.HasValue) { <dt>File upload limit</dt><dd>@Policy.FileUploadLimitMb MB</dd> }
+                @if (!string.IsNullOrEmpty(Policy.RedirectUrl)) { <dt>Redirect URL</dt><dd class="mono">@Policy.RedirectUrl</dd> }
+                @if (Policy.CustomBlockResponseStatusCode.HasValue) { <dt>Block response code</dt><dd>@Policy.CustomBlockResponseStatusCode</dd> }
+                @if (Policy.ExclusionCount > 0) { <dt>Policy-level exclusions</dt><dd>@Policy.ExclusionCount</dd> }
+            </dl>
+        </div>
+        <div>
+            <h4>Protects</h4>
+            @if (Policy.Associations.Count == 0)
+            {
+                <p class="muted small">This policy is not linked to any Front Door or Application Gateway.</p>
+            }
+            else
+            {
+                <ul class="policy-chips">
+                    @foreach (var a in Policy.Associations.DistinctBy(a => a.Display))
+                    {
+                        <li><span class="chip" title="@a.Id"><Icon Name="link" Size="12" /> @a.Display</span></li>
+                    }
+                </ul>
+            }
+
+            <h4 class="mt">Managed rule sets</h4>
+            @if (Policy.ManagedRuleSets.Count == 0)
+            {
+                <p class="muted small">No managed rule sets configured.</p>
+            }
+            else
+            {
+                <ul class="rulesets">
+                    @foreach (var rs in Policy.ManagedRuleSets)
+                    {
+                        <li>
+                            <b>@rs.RuleSetType @rs.RuleSetVersion</b>
+                            @if (rs.IsLatest == true) { <span class="ok small"> · latest</span> }
+                            else if (rs.IsLatest == false) { <span class="warn small"> · outdated, @rs.LatestVersion available</span> }
+                            else { <span class="muted small"> · latest unknown</span> }
+                            @if (rs.ExclusionCount > 0) { <span class="muted small"> · @rs.ExclusionCount exclusion(s)</span> }
+                            @if (rs.GroupOverrideSummaries.Count > 0)
+                            {
+                                <ul class="small muted">
+                                    @foreach (var s in rs.GroupOverrideSummaries) { <li>@s</li> }
+                                </ul>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    </div>
+
+    <h4 class="mt">Custom rules <span class="count">@Policy.CustomRuleCount</span></h4>
+    @if (Policy.CustomRules.Count == 0)
+    {
+        <p class="muted small">No custom rules defined.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="table inner">
+                <thead><tr><th class="num">Priority</th><th>Name</th><th>Type</th><th>Action</th><th>State</th><th>Match conditions</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Policy.CustomRules.OrderBy(r => r.Priority))
+                    {
+                        <tr>
+                            <td class="num">@r.Priority</td>
+                            <td><b>@r.Name</b></td>
+                            <td>@r.RuleType @if (r.RateLimitThreshold.HasValue) { <div class="muted small">@r.RateLimitThreshold req / @r.RateLimitDuration</div> }</td>
+                            <td><span class="badge @ActionClass(r.Action)">@(string.IsNullOrEmpty(r.Action) ? "—" : r.Action)</span></td>
+                            <td><span class="badge @(r.EnabledState.Equals("Disabled", StringComparison.OrdinalIgnoreCase) ? "bad" : "ok")">@(string.IsNullOrEmpty(r.EnabledState) ? "Enabled" : r.EnabledState)</span></td>
+                            <td>@foreach (var c in r.Conditions) { <div class="mono small">@c</div> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WafPolicyInfo Policy { get; set; } = default!;
+
+    private static string ActionClass(string action) => action.ToLowerInvariant() switch
+    {
+        "block" => "bad",
+        "allow" => "ok",
+        "log" => "info",
+        "redirect" => "info",
+        _ => ""
+    };
+}

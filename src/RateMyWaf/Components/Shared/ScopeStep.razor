@@ -1,0 +1,362 @@
+@inject WafFlowService Flows
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="card">
+    <div class="card-head">
+        <h2 class="card-title">1 · Choose what to scan</h2>
+        @if (!Flows.State.DemoMode)
+        {
+            <button class="btn btn-ghost btn-sm" title="Re-read subscriptions (after az login)" @onclick="() => LoadAsync(force: true)" disabled="@_loading">
+                <Icon Name="refresh" Size="14" /> Reload
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="loading"><span class="spinner"></span> Loading subscriptions from Azure…</div>
+    }
+    else if (LoadError is not null)
+    {
+        <div class="notice notice-error">
+            <Icon Name="warn" Size="18" />
+            <div>
+                <b>Azure is not reachable.</b>
+                <div class="small">@LoadError</div>
+                <div class="small mt">Sign in with <code>az login</code> in a terminal, then press Reload. Or explore with sample data.</div>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" @onclick="() => LoadAsync(force: true)"><Icon Name="refresh" Size="16" /> Reload</button>
+            <button class="btn btn-ghost" @onclick="UseDemo"><Icon Name="spark" Size="16" /> Use sample data</button>
+        </div>
+    }
+    else
+    {
+        @if (Tenants.Count > 1)
+        {
+            <label class="field">
+                <span class="field-label">Tenant</span>
+                <select class="select" value="@TenantId" @onchange="OnTenantChanged">
+                    @foreach (var t in Tenants)
+                    {
+                        <option value="@t.Id">@t.Name (@SubsIn(t.Id) subscription@(SubsIn(t.Id) == 1 ? "" : "s"))</option>
+                    }
+                </select>
+            </label>
+        }
+        else if (Tenants.Count == 1)
+        {
+            <p class="muted small">Tenant: <b>@Tenants[0].Name</b> <span class="mono">@Tenants[0].Id</span></p>
+        }
+
+        <div class="sub-list-head">
+            <span class="field-label">Subscriptions</span>
+            <span class="sub-list-tools">
+                @if (_summaryLoading)
+                {
+                    <span class="muted small"><span class="spinner sm"></span> counting @Flow.PluralLabel()…</span>
+                }
+                else if (_summaryError is not null)
+                {
+                    <span class="muted small" title="@_summaryError">Resource counts unavailable</span>
+                }
+                <button class="link" @onclick="SelectRelevant">Select all with @Flow.PluralLabel()</button>
+                <button class="link" @onclick="ClearSelection">Clear</button>
+            </span>
+        </div>
+
+        var subs = TenantSubscriptions.ToList();
+        var relevant = subs.Where(s => IsRelevant(s.SubscriptionId) != false).ToList();
+        var irrelevant = subs.Where(s => IsRelevant(s.SubscriptionId) == false).ToList();
+
+        @if (subs.Count == 0)
+        {
+            <p class="muted">No subscriptions in this tenant.</p>
+        }
+
+        <ul class="sub-list">
+            @foreach (var s in relevant)
+            {
+                @SubRow(s)
+            }
+        </ul>
+
+        @if (irrelevant.Count > 0)
+        {
+            <button class="link small" @onclick="() => _showIrrelevant = !_showIrrelevant">
+                @(_showIrrelevant ? "Hide" : "Show") @irrelevant.Count subscription@(irrelevant.Count == 1 ? "" : "s") without @Flow.PluralLabel()
+            </button>
+            @if (_showIrrelevant)
+            {
+                <ul class="sub-list dim">
+                    @foreach (var s in irrelevant)
+                    {
+                        @SubRow(s)
+                    }
+                </ul>
+            }
+        }
+
+        @if (_scanning)
+        {
+            <div class="scan-progress">
+                <span class="spinner"></span>
+                <div>
+                    <b>Scanning…</b>
+                    <div class="small muted">@_progress</div>
+                </div>
+            </div>
+        }
+        else
+        {
+            @if (State.ScanError is not null)
+            {
+                <div class="notice notice-error"><Icon Name="warn" Size="18" /><div><b>Scan failed.</b><div class="small">@State.ScanError</div></div></div>
+            }
+            <div class="actions">
+                <button class="btn btn-primary btn-lg" @onclick="ScanAsync" disabled="@(State.SelectedSubscriptionIds.Count == 0)">
+                    <Icon Name="shield" Size="18" />
+                    Scan @State.SelectedSubscriptionIds.Count subscription@(State.SelectedSubscriptionIds.Count == 1 ? "" : "s")
+                </button>
+                @if (State.HasScan)
+                {
+                    <a class="btn btn-ghost" href="/@Flow.Route()/grades">Back to grades <Icon Name="arrow" Size="16" /></a>
+                }
+                @if (!Flows.State.DemoMode)
+                {
+                    <button class="link small ml-auto" @onclick="UseDemo">Try with sample data instead</button>
+                }
+            </div>
+            <p class="small muted mt">
+                The scan reads @Flow.PluralLabel(), WAF policies (rule sets and versions, custom rules, mode, exclusions),
+                which policy covers each @(Flow == WafFlowKind.FrontDoor ? "endpoint and domain" : "listener"), and whether WAF logs are shipped and where.
+                Nothing is changed.
+            </p>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+    [Parameter] public EventCallback OnScanCompleted { get; set; }
+
+    private FlowState State => Flows.State.For(Flow);
+    private bool _loading;
+    private bool _scanning;
+    private string _progress = "";
+    private bool _showIrrelevant;
+    private bool _summaryLoading;
+    private string? _summaryError;
+    private Dictionary<string, WafSubscriptionSummary>? _summaries;
+    private CancellationTokenSource? _cts;
+
+    private string? LoadError => Flows.State.DemoMode ? null : Flows.State.LoadError;
+
+    private List<(string Id, string Name)> Tenants => Flows.Subscriptions
+        .Select(s => s.TenantId).Where(t => !string.IsNullOrEmpty(t)).Distinct(StringComparer.OrdinalIgnoreCase)
+        .Select(t => (t, Flows.TenantName(t)))
+        .OrderBy(t => t.Item2, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    private string TenantId => State.SelectedTenantId ?? Tenants.FirstOrDefault().Id ?? "";
+
+    private int SubsIn(string tenantId) => Flows.Subscriptions.Count(s => s.TenantId.Equals(tenantId, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<SubscriptionInfo> TenantSubscriptions => Flows.Subscriptions
+        .Where(s => s.TenantId.Equals(TenantId, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>true = has relevant resources, false = none, null = unknown yet.</summary>
+    private bool? IsRelevant(string subId) =>
+        _summaries is null ? null : _summaries.TryGetValue(subId, out var s) ? s.IsRelevant(Flow) : null;
+
+    private string CountLabel(string subId)
+    {
+        if (_summaries is null || !_summaries.TryGetValue(subId, out var s)) return "";
+        var parts = new List<string>();
+        var edges = s.EdgeCount(Flow);
+        var policies = s.PolicyCount(Flow);
+        if (edges > 0) parts.Add($"{edges} {(edges == 1 ? Flow.Label() : Flow.PluralLabel())}");
+        if (policies > 0) parts.Add($"{policies} WAF polic{(policies == 1 ? "y" : "ies")}");
+        return parts.Count == 0 ? "none" : string.Join(" · ", parts);
+    }
+
+    private RenderFragment SubRow(SubscriptionInfo s) => __builder =>
+    {
+        var checked_ = State.SelectedSubscriptionIds.Contains(s.SubscriptionId);
+        <li class="sub-row @(checked_ ? "checked" : "")">
+            <label>
+                <input type="checkbox" checked="@checked_" @onchange="() => Toggle(s.SubscriptionId)" disabled="@_scanning" />
+                <span class="sub-name">@s.DisplayName</span>
+                <span class="mono sub-id">@s.SubscriptionId</span>
+                <span class="sub-count @(IsRelevant(s.SubscriptionId) == true ? "has" : "")">@CountLabel(s.SubscriptionId)</span>
+            </label>
+        </li>
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync(force: false);
+    }
+
+    private async Task LoadAsync(bool force)
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // Sample-data mode survives a full page reload (the circuit and its state do not).
+            if (!Flows.State.DemoMode && !force)
+            {
+                try
+                {
+                    if (await JS.InvokeAsync<string?>("rmw.getItem", DemoKey) == "1") Flows.EnterDemoMode();
+                }
+                catch { }
+            }
+            await Flows.LoadSubscriptionsAsync(force);
+            if (State.SelectedTenantId is null || Tenants.All(t => !t.Id.Equals(State.SelectedTenantId, StringComparison.OrdinalIgnoreCase)))
+                State.SelectedTenantId = Tenants.FirstOrDefault().Id;
+            await RestoreSelectionAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+        _ = LoadSummariesAsync();
+    }
+
+    private async Task RestoreSelectionAsync()
+    {
+        if (State.SelectedSubscriptionIds.Count > 0) return;
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("rmw.getItem", StorageKey);
+            if (string.IsNullOrEmpty(json)) return;
+            var ids = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? [];
+            var valid = Flows.Subscriptions.Select(s => s.SubscriptionId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in ids.Where(valid.Contains)) State.SelectedSubscriptionIds.Add(id);
+            var first = Flows.Subscriptions.FirstOrDefault(s => State.SelectedSubscriptionIds.Contains(s.SubscriptionId));
+            if (first is not null) State.SelectedTenantId = first.TenantId;
+        }
+        catch { /* storage unavailable */ }
+    }
+
+    private const string DemoKey = "rmw.demo";
+    private string StorageKey => $"rmw.{(Flows.State.DemoMode ? "demo" : "live")}.{Flow.Route()}.subs";
+
+    private async Task PersistSelectionAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("rmw.setItem", StorageKey,
+                State.SelectedSubscriptionIds.Count == 0 ? null : System.Text.Json.JsonSerializer.Serialize(State.SelectedSubscriptionIds.ToList()));
+        }
+        catch { }
+    }
+
+    private async Task LoadSummariesAsync()
+    {
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        var tenantId = TenantId;
+        var ids = TenantSubscriptions.Select(s => s.SubscriptionId).ToList();
+        if (ids.Count == 0) { _summaries = new(); return; }
+
+        _summaryLoading = true;
+        _summaryError = null;
+        _summaries = null;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var summaries = await Flows.GetSummariesAsync(ids, tenantId, cts.Token);
+            if (!cts.IsCancellationRequested) _summaries = summaries;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (!cts.IsCancellationRequested) { _summaryError = ex.Message; _summaries = new(); }
+        }
+        finally
+        {
+            if (!cts.IsCancellationRequested)
+            {
+                _summaryLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task OnTenantChanged(ChangeEventArgs e)
+    {
+        State.SelectedTenantId = e.Value?.ToString();
+        State.SelectedSubscriptionIds.Clear();
+        _showIrrelevant = false;
+        await PersistSelectionAsync();
+        await LoadSummariesAsync();
+    }
+
+    private async Task Toggle(string id)
+    {
+        if (!State.SelectedSubscriptionIds.Remove(id)) State.SelectedSubscriptionIds.Add(id);
+        await PersistSelectionAsync();
+    }
+
+    private async Task SelectRelevant()
+    {
+        State.SelectedSubscriptionIds.Clear();
+        foreach (var s in TenantSubscriptions)
+            if (IsRelevant(s.SubscriptionId) != false) State.SelectedSubscriptionIds.Add(s.SubscriptionId);
+        await PersistSelectionAsync();
+    }
+
+    private async Task ClearSelection()
+    {
+        State.SelectedSubscriptionIds.Clear();
+        await PersistSelectionAsync();
+    }
+
+    private async Task UseDemo()
+    {
+        Flows.EnterDemoMode();
+        try { await JS.InvokeVoidAsync("rmw.setItem", DemoKey, "1"); } catch { }
+        await LoadAsync(force: false);
+    }
+
+    private async Task ScanAsync()
+    {
+        if (State.SelectedSubscriptionIds.Count == 0) return;
+        _scanning = true;
+        _progress = "Starting…";
+        State.ScanError = null;
+        StateHasChanged();
+
+        var progress = new Progress<string>(msg =>
+        {
+            _progress = msg;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            await Flows.ScanAsync(Flow, progress);
+            // Tell the wizard host first: when the browser is already on the grades URL (e.g. after a
+            // reload) NavigateTo is a no-op and the host would not re-render on its own.
+            await OnScanCompleted.InvokeAsync();
+            Nav.NavigateTo($"/{Flow.Route()}/grades");
+        }
+        catch (Exception ex)
+        {
+            State.ScanError = ex.Message;
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    public void Dispose() => _cts?.Cancel();
+}

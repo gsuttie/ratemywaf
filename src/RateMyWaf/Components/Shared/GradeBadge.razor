@@ -1,0 +1,10 @@
+<span class="grade-badge @(Large ? "lg" : "") @(Small ? "sm" : "")" style="background:@WafRatingService.ColorForGrade(Grade);" title="@Title">@Grade</span>
+
+@code {
+    /// <summary>"A" to "F".</summary>
+    [Parameter] public string Grade { get; set; } = "F";
+    [Parameter] public bool Large { get; set; }
+    [Parameter] public bool Small { get; set; }
+
+    private string Title => $"Grade {Grade} — {WafRatingService.LabelForGrade(Grade)}";
+}

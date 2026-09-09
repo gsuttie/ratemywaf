@@ -1,0 +1,50 @@
+@inject WafFlowService Flows
+@inject NavigationManager Nav
+
+<div class="flow-header">
+    <div>
+        <h1><Icon Name="@(Flow == WafFlowKind.FrontDoor ? "door" : "gateway")" Size="26" /> @Flow.Label() WAFs</h1>
+        <p class="muted">@Description</p>
+    </div>
+</div>
+
+<StepBar Route="@Flow.Route()" Current="@CurrentStep" HasScan="@State.HasScan" HasLogTargets="@HasLogTargets" />
+
+@switch (CurrentStep)
+{
+    case "grades":
+        <GradesStep Flow="Flow" />
+        break;
+    case "logs":
+        <LogsStep Flow="Flow" />
+        break;
+    default:
+        <ScopeStep Flow="Flow" OnScanCompleted="StateHasChanged" />
+        break;
+}
+
+@code {
+    [Parameter] public WafFlowKind Flow { get; set; }
+    [Parameter] public string? Step { get; set; }
+
+    private FlowState State => Flows.State.For(Flow);
+
+    private string CurrentStep
+    {
+        get
+        {
+            var requested = (Step ?? "scope").ToLowerInvariant();
+            // Steps that need a scan fall back to scope when there is none (e.g. after a refresh).
+            if (requested is "grades" or "logs" && !State.HasScan) return "scope";
+            if (requested == "logs" && !HasLogTargets) return "grades";
+            return requested is "grades" or "logs" ? requested : "scope";
+        }
+    }
+
+    private bool HasLogTargets => State.Scan is { } s &&
+        (s.FrontDoors.Any(f => f.HasWafAssociation) || s.AppGateways.Any(g => g.HasWaf));
+
+    private string Description => Flow == WafFlowKind.FrontDoor
+        ? "Classic, Standard and Premium Front Doors and the WAF policies attached to their endpoints and domains."
+        : "Application Gateways (any tier), their WAF policies, per-listener coverage and legacy inline WAF configurations.";
+}

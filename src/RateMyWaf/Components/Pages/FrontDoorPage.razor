@@ -1,0 +1,9 @@
+@page "/front-door"
+@page "/front-door/{Step}"
+
+<PageTitle>Front Door WAFs · RateMyWAF</PageTitle>
+<WafFlow Flow="WafFlowKind.FrontDoor" Step="@Step" />
+
+@code {
+    [Parameter] public string? Step { get; set; }
+}

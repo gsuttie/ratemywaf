@@ -1,0 +1,9 @@
+@page "/app-gateway"
+@page "/app-gateway/{Step}"
+
+<PageTitle>Application Gateway WAFs · RateMyWAF</PageTitle>
+<WafFlow Flow="WafFlowKind.ApplicationGateway" Step="@Step" />
+
+@code {
+    [Parameter] public string? Step { get; set; }
+}

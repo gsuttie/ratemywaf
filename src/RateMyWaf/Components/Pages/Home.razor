@@ -1,0 +1,78 @@
+@page "/"
+@inject WafFlowService Flows
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>RateMyWAF</PageTitle>
+
+<section class="hero">
+    <h1>How good is your Azure WAF?</h1>
+    <p class="lead">
+        RateMyWAF finds every Web Application Firewall in your Azure tenant, grades each one from
+        <b>A</b> to <b>F</b> using a 100-point model weighted the way Microsoft's best practices are, and tells you
+        exactly which change lifts the grade. Read-only, three steps, one product at a time.
+    </p>
+</section>
+
+<section class="flow-cards">
+    <a class="flow-card" href="/front-door">
+        <div class="flow-card-icon"><Icon Name="door" Size="30" /></div>
+        <h2>Front Door WAFs</h2>
+        <p>Classic, Standard and Premium profiles. Coverage is rated per endpoint and custom domain, so a domain without a security policy counts against you.</p>
+        <span class="btn btn-primary">Rate Front Doors <Icon Name="arrow" Size="16" /></span>
+    </a>
+    <a class="flow-card" href="/app-gateway">
+        <div class="flow-card-icon"><Icon Name="gateway" Size="30" /></div>
+        <h2>Application Gateway WAFs</h2>
+        <p>WAF_v2 gateways with policies or the legacy inline configuration. Coverage is rated per listener, and non-WAF tiers are called out.</p>
+        <span class="btn btn-primary">Rate App Gateways <Icon Name="arrow" Size="16" /></span>
+    </a>
+</section>
+
+<section class="card">
+    <h2 class="card-title">How the grade is built</h2>
+    <p class="muted">100 points across six categories, mapped to a letter. Hard caps stop a good score hiding a critical gap.</p>
+    <div class="weights">
+        <div class="weight"><span class="weight-pts">30</span><span class="weight-name">WAF coverage &amp; state</span><span class="weight-desc">Enabled WAF policy on every endpoint, domain or listener</span></div>
+        <div class="weight"><span class="weight-pts">20</span><span class="weight-name">Prevention mode</span><span class="weight-desc">Blocking, not just logging</span></div>
+        <div class="weight"><span class="weight-pts">20</span><span class="weight-name">Managed rule protection</span><span class="weight-desc">Default rule set 10 · latest version 5 · Bot Manager 5</span></div>
+        <div class="weight"><span class="weight-pts">15</span><span class="weight-name">Logging &amp; monitoring</span><span class="weight-desc">WAF logs on 10 · flowing to Log Analytics 5</span></div>
+        <div class="weight"><span class="weight-pts">10</span><span class="weight-name">Tuning hygiene</span><span class="weight-desc">Deductions for disabled rules, overrides and exclusions</span></div>
+        <div class="weight"><span class="weight-pts">5</span><span class="weight-name">Hardening extras</span><span class="weight-desc">Rate limit 2 · geo/IP rules 1 · body inspection 2</span></div>
+    </div>
+    <div class="legend-grid">
+        @foreach (var (g, label, desc) in WafRatingService.Legend)
+        {
+            <div class="legend-row" style="background:@(WafRatingService.ColorForGrade(g))1A;">
+                <GradeBadge Grade="@g" Small="true" />
+                <div><b style="color:@WafRatingService.ColorForGrade(g);">@label</b> <span class="muted">· @Band(g)</span><div class="small">@desc</div></div>
+            </div>
+        }
+    </div>
+    <p class="small muted caps">
+        <b>Caps:</b> no enabled WAF → F · any endpoint, domain or listener without a WAF → at most D · detection-only → at most C ·
+        no managed rule set → at most C · WAF logging off → at most B.
+    </p>
+</section>
+
+<section class="card demo-strip">
+    <div>
+        <h2 class="card-title">No Azure access right now?</h2>
+        <p class="muted">Explore both flows with a realistic sample estate. Nothing is sent to Azure.</p>
+    </div>
+    <button class="btn btn-ghost" @onclick="TryDemo"><Icon Name="spark" Size="16" /> Try with sample data</button>
+</section>
+
+@code {
+    private static string Band(string grade) => grade switch
+    {
+        "A" => "90–100", "B" => "75–89", "C" => "60–74", "D" => "45–59", "E" => "30–44", _ => "0–29"
+    };
+
+    private async Task TryDemo()
+    {
+        Flows.EnterDemoMode();
+        try { await JS.InvokeVoidAsync("rmw.setItem", "rmw.demo", "1"); } catch { }
+        Nav.NavigateTo("/front-door");
+    }
+}
