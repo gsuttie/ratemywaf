@@ -55,3 +55,31 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.claude/
+
+# Local secrets and certs
+.env.*
+secrets.json
+appsettings.*.local.json
+*.pfx
+*.pem
+*.key
+
+# Azure tooling
+.azure/
+
+# Playwright / e2e output
+tests/e2e/screenshots/
+tests/e2e/test-results/
+playwright-report/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -46,6 +46,9 @@ No Azure access? Click **Try with sample data** on the home page. Both flows the
 
 ### Authentication
 
+> [!WARNING]
+> **RateMyWAF has no login of its own.** Every visitor to the site uses the same Azure credential the app was started with, and one shared token cache serves them all. Run it on your own workstation, or put it behind authentication you control (for example App Service Easy Auth or a reverse proxy). If you host it on App Service with a managed identity and no auth in front, **anyone who can reach the URL can read every subscription that identity has access to.**
+
 The app uses `AzureCliCredential` by default. To run it somewhere without the Azure CLI (App Service, a container with a managed identity), set `Azure:Credential` to `Default` in `appsettings.json` or as the environment variable `Azure__Credential=Default` to use `DefaultAzureCredential`.
 
 The credential needs **Reader** on the subscriptions and, for the Logs step, **Log Analytics Reader** on the workspace the WAF logs land in.
