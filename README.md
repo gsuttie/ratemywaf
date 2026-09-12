@@ -1,5 +1,7 @@
 # RateMyWAF
 
+![RateMyWAF](ratemywaf.png)
+
 Find every Azure Web Application Firewall in a tenant, grade each one **A to F**, and see exactly which change lifts the grade.
 
 RateMyWAF is a read-only Blazor Server app with two separate flows, one per product:
