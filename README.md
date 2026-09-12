@@ -15,7 +15,7 @@ Each flow is three steps: **Scope** (tenant and subscriptions) → **Grades** (A
 
 ## Scoring model
 
-The scoring model is the WAFFLOW model, applied unchanged to both products: 100 points across six weighted categories, mapped to a letter, with hard caps.
+The scoring model is the model, applied unchanged to both products: 100 points across six weighted categories, mapped to a letter, with hard caps.
 
 | Category | Points | What earns it |
 |---|---|---|
@@ -78,14 +78,14 @@ RateMyWAF never modifies a resource. The fix scripts it generates are PowerShell
 dotnet test
 ```
 
-The suite covers the rating engine (the Front Door cases are the WAFFLOW reference cases and must keep producing identical scores), Application Gateway rating, JSON parsing of every Azure shape, findings, log classification, fix scripts, Word/HTML reports, the sample estate, and the Blazor components (bUnit).
+The suite covers the rating engine (the Front Door cases are the reference cases and must keep producing identical scores), Application Gateway rating, JSON parsing of every Azure shape, findings, log classification, fix scripts, Word/HTML reports, the sample estate, and the Blazor components (bUnit).
 
 ## Project layout
 
 ```
 src/RateMyWaf/
   Components/Pages       Home, FrontDoorPage, AppGatewayPage
-  Components/Shared      WafFlow (wizard), ScopeStep, GradesStep, LogsStep, modals, badges
+  Components/Shared      (wizard), ScopeStep, GradesStep, LogsStep, modals, badges
   Services/
     WafRatingService     The A–F engine (shared by both products)
     WafDiscoveryService  Resource Graph / ARM discovery, coverage, versions, diagnostics
