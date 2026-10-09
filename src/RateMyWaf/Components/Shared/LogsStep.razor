@@ -73,11 +73,16 @@
     else
     {
         <div class="policy-picks">
-            <span class="field-label">Policies</span>
-            @foreach (var p in Linked)
-            {
-                <label class="check"><input type="checkbox" checked="@_selectedPolicies.Contains(p.Id)" @onchange="() => TogglePolicy(p.Id)" disabled="@_running" /> @p.Name <span class="muted small">· @(p.IsEnabled ? p.Mode : "Disabled")</span></label>
-            }
+            <div class="policy-picks-head">
+                <span class="field-label">Policies</span>
+                <label class="check select-all" title="@(AllSelected ? "Unselect all policies" : "Select all policies")"><input type="checkbox" checked="@AllSelected" @onchange="ToggleAll" disabled="@_running" /> <span class="muted small">@(AllSelected ? "Unselect all" : "Select all")</span></label>
+            </div>
+            <div class="policy-picks-list">
+                @foreach (var p in Linked)
+                {
+                    <label class="check"><input type="checkbox" checked="@_selectedPolicies.Contains(p.Id)" @onchange="() => TogglePolicy(p.Id)" disabled="@_running" /> @p.Name <span class="muted small">· @(p.IsEnabled ? p.Mode : "Disabled")</span></label>
+                }
+            </div>
             @if (_selectedPolicies.Count == 0)
             {
                 <span class="muted small">none ticked: every firewall event for this @Flow.Label() is analysed</span>
@@ -147,12 +152,24 @@ else if (Result is not null)
     else
     {
         <h3 class="section-title">Alert assessment <span class="count">@Result.RuleActivities.Count</span></h3>
-        @foreach (var a in Result.RuleActivities)
+        <div class="chips class-filter" role="group" aria-label="Filter by assessment">
+            <button type="button" class="chip chip-btn @(_classFilter is null ? "active" : "")" @onclick="() => SetClassFilter(null)">All <span class="count">@Result.RuleActivities.Count</span></button>
+            @foreach (var c in Classifications)
+            {
+                var n = Result.RuleActivities.Count(x => x.Classification == c);
+                <button type="button" class="chip chip-btn @ClassCss(c) @(_classFilter == c ? "active" : "")" @onclick="() => SetClassFilter(c)">@c <span class="count">@n</span></button>
+            }
+        </div>
+        @if (!FilteredActivities.Any())
+        {
+            <p class="muted small">No rules match the "@_classFilter" filter.</p>
+        }
+        @foreach (var a in FilteredActivities)
         {
             var cls = ClassCss(a.Classification);
             <article class="card activity @cls">
                 <div class="activity-head">
-                    <span class="class-pill @cls">@a.Classification</span>
+                    <button type="button" class="class-pill @cls" title="Show only @a.Classification" @onclick="() => SetClassFilter(a.Classification)">@a.Classification</button>
                     <b>@a.RuleName</b>
                     @if (!string.IsNullOrEmpty(a.PolicyName)) { <span class="muted small">policy: @a.PolicyName</span> }
                     <span class="ml-auto muted small">@a.Count.ToString("N0") events</span>
@@ -295,6 +312,14 @@ else if (Result is not null)
 
     private void TogglePolicy(string id) { if (!_selectedPolicies.Remove(id)) _selectedPolicies.Add(id); }
 
+    private bool AllSelected => Linked.Count > 0 && Linked.All(p => _selectedPolicies.Contains(p.Id));
+
+    private void ToggleAll()
+    {
+        if (AllSelected) { _selectedPolicies.Clear(); return; }
+        foreach (var p in Linked) _selectedPolicies.Add(p.Id);
+    }
+
     private (bool? On, List<string> Dests) Logging(string id)
     {
         var fd = Scan?.FrontDoors.FirstOrDefault(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
@@ -325,6 +350,15 @@ else if (Result is not null)
     }
 
     private void OpenFix(WafRuleActivity a) => _fix.Open(a);
+
+    private static readonly string[] Classifications = ["Likely real attack", "Needs review", "Possible false positive"];
+    private string? _classFilter;
+
+    private IEnumerable<WafRuleActivity> FilteredActivities =>
+        Result is null ? [] : Result.RuleActivities.Where(a => _classFilter is null || a.Classification == _classFilter);
+
+    /// <summary>Clicking the active filter (or a card's pill while it is already selected) clears it.</summary>
+    private void SetClassFilter(string? classification) => _classFilter = _classFilter == classification ? null : classification;
 
     private static string ClassCss(string classification) => classification switch
     {

@@ -181,6 +181,9 @@ button { font: inherit; color: inherit; }
 .field-label { font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
 .select { padding: .55rem .7rem; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; min-width: 180px; }
 .check { display: inline-flex; align-items: center; gap: .4rem; margin-right: 1rem; font-size: .92rem; cursor: pointer; }
+.check.select-all { margin: 0 0 0 .75rem; padding-left: .75rem; border-left: 1px solid var(--border); }
+.policy-picks-head { flex-basis: 100%; display: flex; align-items: center; }
+.policy-picks-list { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .5rem 0; }
 input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); }
 
 .notice { display: flex; align-items: flex-start; gap: .6rem; padding: .7rem .9rem; border-radius: 10px; margin: .6rem 0; border: 1px solid transparent; }
@@ -320,6 +323,19 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .class-pill.attack { background: #D32F2F; }
 .class-pill.fp { background: #F57C00; }
 .class-pill.review { background: #1976D2; }
+button.class-pill { border: 0; cursor: pointer; font: inherit; font-size: .74rem; font-weight: 800; line-height: 1.4; }
+button.class-pill:hover { filter: brightness(1.15); }
+.class-filter { margin: 0 0 .75rem; }
+.class-filter .chip-btn { background: transparent; }
+.class-filter .chip-btn .count { margin-left: .2rem; }
+.class-filter .chip-btn.attack { color: #E57373; border-color: #D32F2F; }
+.class-filter .chip-btn.fp { color: #FFB74D; border-color: #F57C00; }
+.class-filter .chip-btn.review { color: #64B5F6; border-color: #1976D2; }
+.class-filter .chip-btn.active { background: var(--surface-2); color: var(--text); box-shadow: 0 0 0 2px var(--accent); }
+.class-filter .chip-btn.active.attack { background: #D32F2F; color: #fff; box-shadow: none; }
+.class-filter .chip-btn.active.fp { background: #F57C00; color: #fff; box-shadow: none; }
+.class-filter .chip-btn.active.review { background: #1976D2; color: #fff; box-shadow: none; }
+.class-filter .chip-btn.active .count { background: rgba(255,255,255,.2); border-color: transparent; color: inherit; }
 .samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .6rem 1.2rem; margin: .4rem 0 .6rem; min-width: 0; }
 .samples > div { min-width: 0; }
 .recs { list-style: none; margin: .2rem 0 .4rem; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
